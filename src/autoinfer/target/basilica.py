@@ -100,7 +100,10 @@ def run_campaign():
         r = subprocess.run(["apt-get", "update", "-qq"], env=env)
         if r.returncode != 0:
             log("apt-get update rc=" + str(r.returncode) + " (proceeding anyway)")
-        r = subprocess.run(["apt-get", "install", "-yqq", "git", "ca-certificates"], env=env)
+        r = subprocess.run(
+            ["apt-get", "install", "-yqq", "git", "ca-certificates", "build-essential"],
+            env=env,
+        )
         if r.returncode != 0:
             STATE["stage"] = "apt_install_failed"
             STATE["error"] = "apt install git rc=" + str(r.returncode)
