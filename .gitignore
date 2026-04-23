@@ -34,3 +34,8 @@ artifacts/
 
 # os
 .DS_Store
+
+# secrets (never commit)
+.env
+.env.*
+basilica-artifacts/

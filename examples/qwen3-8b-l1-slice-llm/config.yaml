@@ -1,5 +1,7 @@
-# Same as qwen3-8b-l1-slice/config.yaml but with Anthropic as the
-# warmstart + operator policy LLM. Requires ANTHROPIC_API_KEY in env.
+# LLM-proposer variant of qwen3-8b-l1-slice. Uses OpenRouter with
+# Claude Sonnet 4 as the policy LLM for both warmstart and the
+# operator. Requires OPENROUTER_API_KEY in env; the orchestrator
+# forwards it to the Basilica deployment automatically.
 
 name: qwen3-8b-l1-slice-llm
 
@@ -16,18 +18,19 @@ harness:
     prompts_path: ./quality/500_prompts.jsonl
     smoke_prompts: 20
     full_prompts: 500
-    batch_sizes: [1, 4]
-    max_kl: 0.05
+    batch_sizes: [1]
+    max_kl: 2.0
   ledger:
     output_dir: ./runs/qwen3-8b-l1-slice-llm
     pareto_axes: [tokens_per_sec, tpot_p99_ms, peak_hbm_gb]
 
 policy:
   warmstart:
-    provider: anthropic
-    llm_model: claude-opus-4-7
+    provider: openai_compatible
+    base_url: https://openrouter.ai/api/v1
+    llm_model: anthropic/claude-sonnet-4
     n_configs: 6
-    api_key_env: ANTHROPIC_API_KEY
+    api_key_env: OPENROUTER_API_KEY
   surrogate:
     kind: tpe
     seed: 0
@@ -35,8 +38,8 @@ policy:
     rungs: [100, 500]
     eta: 3
   operator:
-    llm_model: claude-opus-4-7
-    cadence: 6
+    llm_model: anthropic/claude-sonnet-4
+    cadence: 5
 
 layers:
   l1_engine:
