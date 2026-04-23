@@ -78,3 +78,50 @@ def test_l1_adapter_exports_and_constructs() -> None:
     assert adapter.layer_name == "l1_engine"
     surface = adapter.surface()
     assert "max_num_batched_tokens" in surface
+
+
+def test_l1_adapter_rejects_constraint_violation_without_subprocess() -> None:
+    """Canary: a compat-rule violation is classified as STARTUP failure pre-spawn.
+
+    This is the step-5 canary from docs/runbook-iteration-zero.md.
+    The adapter must reject without ever calling ``subprocess.Popen``,
+    so it runs on CPU with no vllm dependency and is safe to use as
+    the first CI-gate against regressions in the constraint pipeline.
+    """
+    from autoinfer.harness.failure import FailureKind
+    from autoinfer.layers import TrialInput
+    from autoinfer.layers.l1_engine import L1EngineAdapter, load_catalog
+
+    catalog = load_catalog(
+        Path(__file__).parent.parent / "src/autoinfer/layers/l1_engine/knobs.yaml"
+    )
+    adapter = L1EngineAdapter(
+        model="Qwen/Qwen3-8B",
+        catalog=catalog,
+        trace_path=Path("/tmp/trace.jsonl"),
+        reference_uri="http://localhost:8001",
+        quality_prompts=["hi"],
+        max_kl=0.05,
+        result_dir=Path("/tmp/runs"),
+    )
+
+    bad_config = {
+        "max_num_batched_tokens": 2048,
+        "max_num_seqs": 128,
+        "enable_chunked_prefill": True,
+        "block_size": 16,
+        "kv_cache_dtype": "fp8",
+        "gpu_memory_utilization": 0.90,
+        "enable_prefix_caching": False,
+        "attention_backend": "XFORMERS",
+        "num_scheduler_steps": 1,
+        "swap_space": 4,
+        "dtype": "auto",
+        "quantization": "none",
+    }
+    out = adapter.run(TrialInput(trial_id="canary-0", config=bad_config))
+
+    assert out.measurement is None
+    assert out.failure is not None
+    assert out.failure.kind is FailureKind.STARTUP
+    assert "kv_fp8_requires_compatible_backend" in out.failure.message
