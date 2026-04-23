@@ -3,36 +3,45 @@ from __future__ import annotations
 from autoinfer.target.basilica import CampaignSpec
 
 
-def test_default_spec_source_contains_expected_phases() -> None:
+def test_bootstrap_source_is_ascii_only() -> None:
+    """Basilica's validator rejects sources with non-ASCII chars."""
     src = CampaignSpec().build_source()
-    # phases the dev-side orchestrator relies on
-    assert "install_uv()" in src
-    assert "clone_repo()" in src
-    assert "install_deps()" in src
-    assert "prepare_data()" in src
-    assert "start_reference()" in src
-    assert "run_campaign()" in src
-    assert "summarize()" in src
-    # http server must start BEFORE slow steps so basilica health-check passes
-    assert "start_status_server()" in src
-    # completion marker the orchestrator tails for
-    assert "campaign finished rc=" in src
+    for i, ch in enumerate(src):
+        assert ord(ch) < 128, f"non-ASCII at index {i}: {ch!r}"
 
 
-def test_source_starts_http_server_before_install() -> None:
-    """Regression: basilica health-checks /health during startup; the
-    server must be up before install_uv (which can take minutes)."""
+def test_bootstrap_source_is_small() -> None:
+    """Bootstrap must stay small so the deploy-time validator accepts it."""
     src = CampaignSpec().build_source()
-    start_idx = src.index("start_status_server()")
-    install_idx = src.index("install_uv()")
-    # start must appear strictly before install in the main() ordering
-    assert start_idx < install_idx
+    # generous ceiling; current size is ~2.5 KB
+    assert len(src) < 4000, f"bootstrap too large: {len(src)} chars"
 
 
-def test_source_exposes_health_and_status_endpoints() -> None:
+def test_bootstrap_starts_http_server_before_install() -> None:
+    src = CampaignSpec().build_source()
+    # HTTP thread must be started BEFORE the pip install + clone calls
+    http_idx = src.index("serve_forever")
+    pip_idx = src.index("pip")
+    assert http_idx < pip_idx
+
+
+def test_bootstrap_exposes_health_endpoint() -> None:
     src = CampaignSpec().build_source()
     assert '"/health"' in src
-    assert '"/status"' in src
+
+
+def test_bootstrap_uses_pip_not_curl_pipe() -> None:
+    """Bootstrap installs uv via pip, not `curl | sh`, to keep the source safe."""
+    src = CampaignSpec().build_source()
+    assert "curl" not in src
+    assert "pip" in src
+
+
+def test_bootstrap_clones_then_execs_campaign_runner() -> None:
+    src = CampaignSpec().build_source()
+    assert "git" in src and "clone" in src
+    assert "scripts/campaign_runner.py" in src
+    assert "campaign finished rc=" in src
 
 
 def test_source_pins_config_and_model() -> None:
@@ -47,27 +56,14 @@ def test_source_pins_config_and_model() -> None:
 
 def test_source_injects_max_trials_when_set() -> None:
     src = CampaignSpec(max_trials=3).build_source()
-    assert '"--max-trials", "3",' in src
+    assert "MAX_TRIALS = 3" in src
+    assert '"--max-trials"' in src
 
 
-def test_source_omits_max_trials_when_none() -> None:
+def test_source_omits_max_trials_flag_when_none() -> None:
     src = CampaignSpec(max_trials=None).build_source()
-    # no --max-trials flag in the command
-    assert '"--max-trials"' not in src
-
-
-def test_source_injects_extra_autoinfer_args() -> None:
-    src = CampaignSpec(extra_autoinfer_args=("--foo", "bar")).build_source()
-    assert '"--foo",' in src
-    assert '"bar",' in src
-
-
-def test_source_includes_hf_login_only_when_token_env_is_set() -> None:
-    no_hf = CampaignSpec().build_source()
-    with_hf = CampaignSpec(hf_token_env="HF_TOKEN").build_source()
-    assert "huggingface-cli" not in no_hf
-    assert "huggingface-cli" in with_hf
-    assert 'os.environ["HF_TOKEN"]' in with_hf
+    # MAX_TRIALS = None so the --max-trials cmd extension is skipped at runtime
+    assert "MAX_TRIALS = None" in src
 
 
 def test_deploy_kwargs_minimal() -> None:
@@ -76,7 +72,7 @@ def test_deploy_kwargs_minimal() -> None:
     assert kw["name"] == "test-deploy"
     assert kw["image"] == "pytorch/pytorch:2.4.1-cuda12.4-cudnn9-devel"
     assert kw["gpu_count"] == 2
-    assert kw["memory"] == "128Gi"
+    assert kw["memory"] == "64Gi"
     assert kw["storage"] is True
     assert kw["port"] == 9000
     assert kw["ttl_seconds"] == 43200
@@ -128,10 +124,7 @@ def test_source_compiles_as_valid_python() -> None:
 
 
 def test_ports_flow_into_source_text() -> None:
-    spec = CampaignSpec(
-        reference_port=9901, candidate_port=9900, artifacts_port=9999
-    )
+    spec = CampaignSpec(reference_port=9901, artifacts_port=9999)
     src = spec.build_source()
     assert "REF_PORT = 9901" in src
-    assert "CAND_PORT = 9900" in src
     assert "ART_PORT = 9999" in src

@@ -73,7 +73,7 @@ def _parse_args() -> argparse.Namespace:
     p.add_argument("--model", default="Qwen/Qwen3-8B")
     p.add_argument("--image", default="pytorch/pytorch:2.4.1-cuda12.4-cudnn9-devel")
     p.add_argument("--gpus", type=int, default=2)
-    p.add_argument("--memory", default="128Gi")
+    p.add_argument("--memory", default="64Gi")
     p.add_argument("--min-gpu-memory-gb", type=int, default=40)
     p.add_argument("--ttl-hours", type=float, default=12.0)
     p.add_argument("--artifacts-dir", type=Path, default=Path("./basilica-artifacts"))
