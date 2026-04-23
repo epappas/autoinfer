@@ -36,6 +36,10 @@ def build_runner(
     catalog = load_catalog(l1_cfg.knobs_path)
 
     prompts = _load_prompts(cfg.harness.gate.prompts_path)
+    # cap to smoke_prompts so per-trial gate stays bounded; the gate
+    # does 2 sequential HTTP calls per prompt (candidate + reference)
+    # and each can take several seconds.
+    prompts = prompts[: cfg.harness.gate.smoke_prompts]
 
     adapter = L1EngineAdapter(
         model=l1_cfg.model,

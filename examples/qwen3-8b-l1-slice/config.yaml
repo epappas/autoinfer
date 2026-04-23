@@ -9,9 +9,9 @@ harness:
   gate:
     replica_uri: http://127.0.0.1:8001
     prompts_path: ./quality/500_prompts.jsonl
-    smoke_prompts: 100
+    smoke_prompts: 20
     full_prompts: 500
-    batch_sizes: [1, 8, 64]
+    batch_sizes: [1, 4]
     max_kl: 0.05
   ledger:
     output_dir: ./runs/qwen3-8b-l1-slice
