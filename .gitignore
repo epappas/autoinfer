@@ -1,0 +1,36 @@
+# python
+__pycache__/
+*.py[cod]
+*.egg-info/
+*.egg
+.eggs/
+build/
+dist/
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.coverage
+coverage.xml
+htmlcov/
+
+# uv / venvs
+.venv/
+venv/
+
+# ide
+.idea/
+.vscode/
+
+# runtime artifacts
+runs/
+traces/*.jsonl
+traces/*.parquet
+artifacts/
+
+# model caches
+*.safetensors
+*.bin
+*.pt
+
+# os
+.DS_Store
