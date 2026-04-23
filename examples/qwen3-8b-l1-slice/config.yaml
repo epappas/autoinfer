@@ -2,10 +2,12 @@ name: qwen3-8b-l1-slice-iteration-zero
 
 harness:
   driver:
-    trace_path: ./trace/sharegpt_sample.jsonl
+    trace_path: ./trace/sharegpt_full.json
     duration_s: 900
     slo_ttft_p99_ms: 800.0
     slo_tpot_p99_ms: 80.0
+    dataset_name: sharegpt
+    num_prompts: 64
   gate:
     replica_uri: http://127.0.0.1:8001
     prompts_path: ./quality/500_prompts.jsonl

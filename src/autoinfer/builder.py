@@ -52,6 +52,8 @@ def build_runner(
         batch_sizes=cfg.harness.gate.batch_sizes,
         candidate_port=l1_cfg.candidate_port,
         startup_timeout_s=l1_cfg.startup_timeout_s,
+        dataset_name=cfg.harness.driver.dataset_name,
+        num_prompts=cfg.harness.driver.num_prompts,
     )
 
     surrogate = OptunaSurrogate(

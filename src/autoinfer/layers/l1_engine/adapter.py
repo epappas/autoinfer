@@ -88,6 +88,9 @@ class L1EngineAdapter:
     startup_timeout_s: int = 600
     driver_timeout_s: int = 1800
     gpu_device_id: int = 0
+    dataset_name: str = "random"
+    num_prompts: int = 64
+    gate_concurrency: int = 8
     _process: subprocess.Popen[bytes] | None = field(default=None, init=False, repr=False)
 
     def surface(self) -> dict[str, Any]:
@@ -130,6 +133,8 @@ class L1EngineAdapter:
                 result_dir=self.result_dir,
                 result_name=f"{trial.trial_id}_bench.json",
                 timeout_s=self.driver_timeout_s,
+                dataset_name=self.dataset_name,
+                num_prompts=self.num_prompts,
             )
         except (subprocess.TimeoutExpired, RuntimeError) as e:
             return TrialOutput(
@@ -143,6 +148,7 @@ class L1EngineAdapter:
                 model=self.model,
                 prompts=self.quality_prompts,
                 batch_sizes=self.batch_sizes,
+                concurrency=self.gate_concurrency,
             )
         except Exception as e:
             return TrialOutput(

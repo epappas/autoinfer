@@ -142,15 +142,28 @@ def run_gate(
     batch_sizes: tuple[int, ...] = (1, 8, 64),
     top_k: int = 5,
     max_tokens: int = 32,
+    concurrency: int = 8,
 ) -> GateResult:
-    """End-to-end quality gate: KL across prompts + batch invariance sample."""
+    """End-to-end quality gate: KL across prompts + batch invariance sample.
+
+    Per-prompt KL is computed in parallel via a bounded thread pool so a
+    500-prompt gate finishes in seconds rather than minutes. ``concurrency``
+    caps how many concurrent (candidate, reference) pairs hit each endpoint
+    — leave at 8 or lower so a single-GPU reference replica stays responsive.
+    """
     if not prompts:
         raise ValueError("prompts must be non-empty")
-    per_prompt: list[float] = []
-    for p in prompts:
-        ref = fetch_logprobs(reference_endpoint, model, p, top_k, max_tokens)
-        cand = fetch_logprobs(candidate_endpoint, model, p, top_k, max_tokens)
-        per_prompt.append(topk_kl_divergence(ref, cand))
+    if concurrency < 1:
+        raise ValueError("concurrency must be >= 1")
+
+    def _kl_for(prompt: str) -> float:
+        ref = fetch_logprobs(reference_endpoint, model, prompt, top_k, max_tokens)
+        cand = fetch_logprobs(candidate_endpoint, model, prompt, top_k, max_tokens)
+        return topk_kl_divergence(ref, cand)
+
+    with concurrent.futures.ThreadPoolExecutor(max_workers=concurrency) as ex:
+        per_prompt = list(ex.map(_kl_for, prompts))
+
     invariant, reps = batch_invariance_check(
         candidate_endpoint, model, prompts[0], batch_sizes, max_tokens
     )

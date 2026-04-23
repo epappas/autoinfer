@@ -110,9 +110,9 @@ def build_bench_command(
         "--result-filename", result_name,
         "--result-dir", str(result_dir),
     ]
-    if dataset_name == "custom":
+    if dataset_name in ("custom", "sharegpt", "sonnet"):
         cmd.extend(["--dataset-path", str(trace_path)])
-    elif dataset_name == "random":
+    if dataset_name == "random":
         cmd.extend([
             "--random-input-len", str(random_input_len),
             "--random-output-len", str(random_output_len),

@@ -31,6 +31,8 @@ class DriverConfig(_Base):
     duration_s: int = Field(gt=0)
     slo_ttft_p99_ms: float = Field(gt=0.0)
     slo_tpot_p99_ms: float = Field(gt=0.0)
+    dataset_name: Literal["random", "sharegpt", "custom", "sonnet"] = "random"
+    num_prompts: int = Field(ge=1, default=64)
 
 
 class QualityGateConfig(_Base):
