@@ -83,8 +83,9 @@ def build_bench_command(
     """
     cmd: list[str] = [
         "vllm", "bench", "serve",
-        "--backend", "openai-chat",
+        "--backend", "openai",
         "--base-url", endpoint,
+        "--endpoint", "/v1/completions",
         "--model", model,
         "--dataset-name", dataset_name,
         "--save-result",
