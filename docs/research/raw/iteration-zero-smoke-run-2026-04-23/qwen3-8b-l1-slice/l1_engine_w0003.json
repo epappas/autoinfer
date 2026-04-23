@@ -1,0 +1,25 @@
+{
+  "config": {
+    "attention_backend": "FLASH_ATTN",
+    "block_size": 16,
+    "dtype": "auto",
+    "enable_chunked_prefill": true,
+    "enable_prefix_caching": true,
+    "gpu_memory_utilization": 0.9,
+    "kv_cache_dtype": "auto",
+    "max_num_batched_tokens": 2048,
+    "max_num_seqs": 128,
+    "quantization": "none"
+  },
+  "failure": {
+    "kind": "quality_kl",
+    "layer": "l1_engine",
+    "message": "gate rejected mean_kl=2.6419 invariant=True",
+    "metadata": {},
+    "trial_id": "l1_engine_w0003"
+  },
+  "layer": "l1_engine",
+  "measurement": null,
+  "stale": false,
+  "trial_id": "l1_engine_w0003"
+}
