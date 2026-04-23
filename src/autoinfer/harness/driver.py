@@ -69,19 +69,35 @@ def build_bench_command(
     result_name: str,
     num_prompts: int | None = None,
     request_rate: float | None = None,
+    dataset_name: str = "random",
+    random_input_len: int = 128,
+    random_output_len: int = 64,
 ) -> list[str]:
-    """Assemble ``vllm bench serve`` arguments. Pure."""
+    """Assemble ``vllm bench serve`` arguments. Pure.
+
+    ``dataset_name`` defaults to ``random`` because vLLM's CustomDataset
+    format is stricter than a simple {"prompt": "..."} JSONL; for
+    iteration-zero smoke validation we generate synthetic prompts.
+    Set to ``custom`` and supply a compatible ``trace_path`` for real
+    workload replay once the harness is validated.
+    """
     cmd: list[str] = [
         "vllm", "bench", "serve",
         "--backend", "openai-chat",
         "--base-url", endpoint,
         "--model", model,
-        "--dataset-name", "custom",
-        "--dataset-path", str(trace_path),
+        "--dataset-name", dataset_name,
         "--save-result",
         "--result-filename", result_name,
         "--result-dir", str(result_dir),
     ]
+    if dataset_name == "custom":
+        cmd.extend(["--dataset-path", str(trace_path)])
+    elif dataset_name == "random":
+        cmd.extend([
+            "--random-input-len", str(random_input_len),
+            "--random-output-len", str(random_output_len),
+        ])
     if num_prompts is not None:
         cmd.extend(["--num-prompts", str(num_prompts)])
     if request_rate is not None:
@@ -95,9 +111,10 @@ def run_driver(
     model: str,
     result_dir: Path,
     result_name: str = "bench.json",
-    num_prompts: int | None = None,
+    num_prompts: int | None = 64,
     request_rate: float | None = None,
     timeout_s: int = 1800,
+    dataset_name: str = "random",
 ) -> DriverResult:
     """Execute ``vllm bench serve``; parse and return ``DriverResult``.
 
@@ -112,6 +129,7 @@ def run_driver(
         result_name=result_name,
         num_prompts=num_prompts,
         request_rate=request_rate,
+        dataset_name=dataset_name,
     )
     proc = subprocess.run(cmd, capture_output=True, text=True, timeout=timeout_s)
     if proc.returncode != 0:

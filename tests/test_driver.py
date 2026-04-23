@@ -46,7 +46,7 @@ def test_parse_missing_goodput_falls_back_to_throughput() -> None:
     assert r.goodput_req_per_sec == 7.0
 
 
-def test_build_bench_command_minimal() -> None:
+def test_build_bench_command_random_default() -> None:
     cmd = build_bench_command(
         endpoint="http://localhost:8000",
         trace_path=Path("/tmp/trace.jsonl"),
@@ -55,15 +55,28 @@ def test_build_bench_command_minimal() -> None:
         result_name="bench.json",
     )
     assert cmd[:3] == ["vllm", "bench", "serve"]
-    assert "--base-url" in cmd
-    assert "http://localhost:8000" in cmd
-    assert "--model" in cmd
-    assert "Qwen/Qwen3-8B" in cmd
+    assert "--dataset-name" in cmd
+    assert cmd[cmd.index("--dataset-name") + 1] == "random"
+    assert "--random-input-len" in cmd
+    assert "--random-output-len" in cmd
+    # random mode does not pass --dataset-path
+    assert "--dataset-path" not in cmd
+    assert "--save-result" in cmd
+
+
+def test_build_bench_command_custom_passes_dataset_path() -> None:
+    cmd = build_bench_command(
+        endpoint="http://localhost:8000",
+        trace_path=Path("/tmp/trace.jsonl"),
+        model="Qwen/Qwen3-8B",
+        result_dir=Path("/tmp/out"),
+        result_name="bench.json",
+        dataset_name="custom",
+    )
     assert "--dataset-path" in cmd
     assert "/tmp/trace.jsonl" in cmd
-    assert "--save-result" in cmd
-    assert "--num-prompts" not in cmd
-    assert "--request-rate" not in cmd
+    # custom mode does not emit random-specific flags
+    assert "--random-input-len" not in cmd
 
 
 def test_build_bench_command_with_rate() -> None:
