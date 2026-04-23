@@ -90,7 +90,7 @@ class L1EngineAdapter:
     gpu_device_id: int = 0
     dataset_name: str = "random"
     num_prompts: int = 64
-    gate_concurrency: int = 8
+    gate_concurrency: int = 4
     _process: subprocess.Popen[bytes] | None = field(default=None, init=False, repr=False)
 
     def surface(self) -> dict[str, Any]:
