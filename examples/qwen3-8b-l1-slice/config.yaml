@@ -1,0 +1,41 @@
+name: qwen3-8b-l1-slice-iteration-zero
+
+harness:
+  driver:
+    trace_path: ./trace/sharegpt_sample.jsonl
+    duration_s: 900
+    slo_ttft_p99_ms: 800.0
+    slo_tpot_p99_ms: 80.0
+  gate:
+    replica_uri: http://127.0.0.1:8001
+    prompts_path: ./quality/500_prompts.jsonl
+    smoke_prompts: 100
+    full_prompts: 500
+    batch_sizes: [1, 8, 64]
+    max_kl: 0.05
+  ledger:
+    output_dir: ./runs/qwen3-8b-l1-slice
+    pareto_axes: [tokens_per_sec, tpot_p99_ms, peak_hbm_gb]
+
+policy:
+  warmstart:
+    provider: deterministic
+    llm_model: deterministic
+    n_configs: 8
+  surrogate:
+    kind: tpe
+    seed: 0
+  fidelity:
+    rungs: [100, 500]
+    eta: 3
+
+layers:
+  l1_engine:
+    model: Qwen/Qwen3-8B
+    knobs_path: ../../src/autoinfer/layers/l1_engine/knobs.yaml
+    max_trials: 40
+    candidate_port: 8000
+    startup_timeout_s: 600
+
+target:
+  kind: local

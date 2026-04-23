@@ -1,0 +1,149 @@
+# L1 engine-config knob catalog for autoinfer search.
+#
+# Starter subset (12 axes) transcribed from
+# docs/research/raw/knobs-l1-engine.md. Additional knobs can be layered in
+# without code changes by extending this file.
+#
+# Fields per knob:
+#   type            : int | float | categorical | bool
+#   low / high      : bounds for int and float
+#   step            : optional quantization for int/float
+#   values          : list of choices for categorical
+#   default         : vLLM-documented default
+#   vllm_cli        : CLI flag that takes a value (used for non-bool/env knobs)
+#   vllm_cli_enable : CLI flag when bool is True (no value)
+#   vllm_cli_disable: CLI flag when bool is False (no value)
+#   vllm_env        : environment variable name (takes the value as-is)
+#   coupled_with    : list of knob names whose setting interacts
+#   axis            : primary axis this moves
+#   description     : one-line
+
+knobs:
+  max_num_batched_tokens:
+    type: categorical
+    values: [1024, 2048, 4096, 8192, 16384]
+    default: 2048
+    vllm_cli: --max-num-batched-tokens
+    coupled_with: [max_num_seqs, enable_chunked_prefill]
+    axis: throughput
+    description: Per-iteration token budget across prefill and decode.
+
+  max_num_seqs:
+    type: categorical
+    values: [32, 64, 128, 256, 512]
+    default: 128
+    vllm_cli: --max-num-seqs
+    coupled_with: [max_num_batched_tokens, gpu_memory_utilization]
+    axis: throughput
+    description: Cap on concurrent sequences per scheduler iteration.
+
+  enable_chunked_prefill:
+    type: bool
+    default: true
+    vllm_cli_enable: --enable-chunked-prefill
+    vllm_cli_disable: --no-enable-chunked-prefill
+    coupled_with: [max_num_batched_tokens]
+    axis: latency
+    description: Split long prefills into chunks and co-batch with decode.
+
+  block_size:
+    type: categorical
+    values: [16, 32]
+    default: 16
+    vllm_cli: --block-size
+    coupled_with: [attention_backend, kv_cache_dtype]
+    axis: memory
+    description: KV cache block granularity in tokens.
+
+  kv_cache_dtype:
+    type: categorical
+    values: [auto, fp8, fp8_e4m3, fp8_e5m2]
+    default: auto
+    vllm_cli: --kv-cache-dtype
+    coupled_with: [attention_backend, quantization]
+    axis: memory
+    description: Storage dtype for KV cache entries.
+
+  gpu_memory_utilization:
+    type: float
+    low: 0.80
+    high: 0.95
+    default: 0.90
+    vllm_cli: --gpu-memory-utilization
+    coupled_with: [max_num_seqs, max_num_batched_tokens]
+    axis: memory
+    description: Fraction of GPU memory reserved for model and KV cache.
+
+  enable_prefix_caching:
+    type: bool
+    default: false
+    vllm_cli_enable: --enable-prefix-caching
+    vllm_cli_disable: --no-enable-prefix-caching
+    coupled_with: [block_size]
+    axis: throughput
+    description: Automatic prefix reuse across requests via hash-keyed KV blocks.
+
+  attention_backend:
+    type: categorical
+    values: [FLASHINFER, FLASH_ATTN, TRITON_ATTN, XFORMERS]
+    default: FLASH_ATTN
+    vllm_env: VLLM_ATTENTION_BACKEND
+    coupled_with: [kv_cache_dtype, block_size]
+    axis: throughput
+    description: Attention kernel selection (via env var).
+
+  num_scheduler_steps:
+    type: categorical
+    values: [1, 2, 4, 8]
+    default: 1
+    vllm_cli: --num-scheduler-steps
+    axis: throughput
+    description: Number of decode steps per scheduler iteration.
+
+  swap_space:
+    type: categorical
+    values: [0, 4, 8]
+    default: 4
+    vllm_cli: --swap-space
+    coupled_with: [preemption_mode]
+    axis: memory
+    description: CPU swap budget in GiB per worker for preempted KV blocks.
+
+  dtype:
+    type: categorical
+    values: [auto, float16, bfloat16]
+    default: auto
+    vllm_cli: --dtype
+    axis: quality
+    description: Model compute dtype.
+
+  quantization:
+    type: categorical
+    values: [none, awq, gptq, fp8]
+    default: none
+    vllm_cli: --quantization
+    coupled_with: [kv_cache_dtype, attention_backend, dtype]
+    axis: memory
+    description: Weight-quantization scheme applied at load time.
+
+constraints:
+  - rule: kv_fp8_requires_compatible_backend
+    description: FP8 KV dtypes require FLASHINFER or FLASH_ATTN.
+    when_knob: kv_cache_dtype
+    when_values: [fp8, fp8_e4m3, fp8_e5m2]
+    requires_knob: attention_backend
+    requires_values: [FLASHINFER, FLASH_ATTN]
+
+  - rule: chunked_prefill_batched_tokens_bound
+    description: When chunked prefill is disabled, max_num_batched_tokens must accommodate the longest prompt.
+    when_knob: enable_chunked_prefill
+    when_values: [false]
+    requires_knob: max_num_batched_tokens
+    requires_values: [8192, 16384]
+
+  - rule: quantization_none_means_literal_none
+    description: quantization value 'none' passes no --quantization flag.
+    when_knob: quantization
+    when_values: [none]
+    requires_knob: quantization
+    requires_values: [none]

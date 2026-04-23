@@ -11,7 +11,7 @@ loudly rather than silently (P12: falsifiable).
 from __future__ import annotations
 
 from pathlib import Path
-from typing import Literal
+from typing import Any, Literal
 
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
@@ -58,8 +58,15 @@ class HarnessConfig(_Base):
 
 
 class WarmstartConfig(_Base):
+    provider: Literal["anthropic", "openai_compatible", "deterministic"] = "deterministic"
     llm_model: str = Field(description="Policy LLM id, e.g. 'claude-opus-4-7'.")
+    base_url: str | None = Field(default=None, description="Used when provider='openai_compatible'.")
+    api_key_env: str | None = Field(default=None, description="Env var name holding the API key.")
     n_configs: int = Field(ge=1, le=100, default=15)
+    seed_configs: list[dict[str, Any]] | None = Field(
+        default=None,
+        description="Configs for provider='deterministic'. Required in that mode.",
+    )
 
 
 class SurrogateConfig(_Base):
@@ -94,6 +101,8 @@ class L1EngineConfig(_Base):
     model: str = "Qwen/Qwen3-8B"
     knobs_path: Path
     max_trials: int = Field(ge=1, default=200)
+    candidate_port: int = Field(ge=1024, le=65535, default=8000)
+    startup_timeout_s: int = Field(ge=30, default=600)
 
 
 class L2TopologyConfig(_Base):
