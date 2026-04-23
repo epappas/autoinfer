@@ -131,8 +131,10 @@ def run_campaign():
                 log(STATE["error"])
                 return
 
+        import shutil
+        uv_bin = shutil.which("uv") or "uv"
         cmd = [
-            str(Path.home() / ".local/bin/uv"),
+            uv_bin,
             "run", "python", "scripts/campaign_runner.py",
             "--config", CONFIG,
             "--model", MODEL,
