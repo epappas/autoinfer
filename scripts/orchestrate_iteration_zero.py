@@ -84,7 +84,7 @@ def _parse_args() -> argparse.Namespace:
 
 
 def _build_spec(args: argparse.Namespace) -> CampaignSpec:
-    return CampaignSpec(
+    spec = CampaignSpec(
         repo_url=args.repo,
         branch=args.branch,
         autoinfer_config=args.config,
@@ -92,6 +92,13 @@ def _build_spec(args: argparse.Namespace) -> CampaignSpec:
         max_trials=args.max_trials,
         hf_token_env="HF_TOKEN" if os.environ.get("HF_TOKEN") else None,
     )
+    # Pass through any LLM-provider API keys so the campaign's warmstart
+    # and operator policies can authenticate from within the container.
+    for var in ("ANTHROPIC_API_KEY", "OPENAI_API_KEY", "OPENROUTER_API_KEY"):
+        val = os.environ.get(var)
+        if val:
+            spec.env[var] = val
+    return spec
 
 
 def _print_plan(spec: CampaignSpec, kwargs: dict[str, Any]) -> None:
