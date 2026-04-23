@@ -94,6 +94,19 @@ class S(socketserver.ThreadingTCPServer):
 
 def run_campaign():
     try:
+        STATE["stage"] = "apt_install_git"
+        log("apt-get install git")
+        env = dict(os.environ, DEBIAN_FRONTEND="noninteractive")
+        r = subprocess.run(["apt-get", "update", "-qq"], env=env)
+        if r.returncode != 0:
+            log("apt-get update rc=" + str(r.returncode) + " (proceeding anyway)")
+        r = subprocess.run(["apt-get", "install", "-yqq", "git", "ca-certificates"], env=env)
+        if r.returncode != 0:
+            STATE["stage"] = "apt_install_failed"
+            STATE["error"] = "apt install git rc=" + str(r.returncode)
+            log(STATE["error"])
+            return
+
         STATE["stage"] = "pip_install_uv"
         log("installing uv")
         r = subprocess.run(
@@ -213,6 +226,9 @@ class CampaignSpec:
             hf_token = os.environ.get(self.hf_token_env)
             if hf_token:
                 env["HF_TOKEN"] = hf_token
+        # Startup probe gives ~10 min for apt + pip + git to finish; liveness/
+        # readiness probes tolerate short HTTP hiccups once the server is up
+        # (avoids container restarts during campaign).
         health = basilica.HealthCheckConfig(
             startup=basilica.ProbeConfig(
                 path="/",
@@ -220,6 +236,20 @@ class CampaignSpec:
                 period_seconds=15,
                 timeout_seconds=10,
                 failure_threshold=40,
+            ),
+            liveness=basilica.ProbeConfig(
+                path="/",
+                initial_delay_seconds=600,
+                period_seconds=60,
+                timeout_seconds=15,
+                failure_threshold=5,
+            ),
+            readiness=basilica.ProbeConfig(
+                path="/",
+                initial_delay_seconds=60,
+                period_seconds=30,
+                timeout_seconds=10,
+                failure_threshold=5,
             ),
         )
         return {
