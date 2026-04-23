@@ -43,6 +43,8 @@ MAX_TRIALS = __MAX_TRIALS__
 REF_PORT = __REF_PORT__
 WORKDIR = Path("/workspace/autoinfer")
 
+STATE = {"stage": "booting", "error": None}
+
 
 def log(msg):
     print("[boot] " + msg, flush=True)
@@ -51,7 +53,6 @@ def log(msg):
 class H(http.server.BaseHTTPRequestHandler):
     def do_GET(self):
         runs = WORKDIR / "runs"
-        # serve an actual file under runs/ if it matches
         rel = self.path.lstrip("/")
         if runs.exists() and rel and rel not in ("/",):
             target = (runs / rel).resolve()
@@ -60,13 +61,15 @@ class H(http.server.BaseHTTPRequestHandler):
                 ctype = "application/json" if target.suffix == ".json" else "application/octet-stream"
                 self._r(200, data, ctype)
                 return
-        # default: 200 with a runs-index listing (or placeholder)
         items = []
         if runs.exists():
             for p in sorted(runs.rglob("*.json")):
                 r = p.relative_to(runs).as_posix()
                 items.append('<li><a href="' + r + '">' + r + "</a></li>")
-        body = ("<html><body>ok<ul>" + "".join(items) + "</ul></body></html>").encode()
+        body = (
+            "<html><body>stage=" + str(STATE.get("stage")) + " err=" + str(STATE.get("error"))
+            + "<ul>" + "".join(items) + "</ul></body></html>"
+        ).encode()
         self._r(200, body, "text/html")
 
     def do_HEAD(self):
@@ -89,43 +92,67 @@ class S(socketserver.ThreadingTCPServer):
     daemon_threads = True
 
 
+def run_campaign():
+    try:
+        STATE["stage"] = "pip_install_uv"
+        log("installing uv")
+        r = subprocess.run(
+            [sys.executable, "-m", "pip", "install", "--quiet", "--no-cache-dir", "uv"],
+        )
+        if r.returncode != 0:
+            STATE["stage"] = "pip_failed"
+            STATE["error"] = "pip install uv rc=" + str(r.returncode)
+            log(STATE["error"])
+            return
+
+        STATE["stage"] = "git_clone"
+        log("cloning " + REPO_URL + " branch=" + BRANCH)
+        WORKDIR.parent.mkdir(parents=True, exist_ok=True)
+        if not WORKDIR.exists():
+            r = subprocess.run(
+                ["git", "clone", "--depth", "1", "--branch", BRANCH, REPO_URL, str(WORKDIR)],
+            )
+            if r.returncode != 0:
+                STATE["stage"] = "git_failed"
+                STATE["error"] = "git clone rc=" + str(r.returncode)
+                log(STATE["error"])
+                return
+
+        cmd = [
+            str(Path.home() / ".local/bin/uv"),
+            "run", "python", "scripts/campaign_runner.py",
+            "--config", CONFIG,
+            "--model", MODEL,
+            "--ref-port", str(REF_PORT),
+        ]
+        if MAX_TRIALS is not None:
+            cmd.extend(["--max-trials", str(MAX_TRIALS)])
+
+        STATE["stage"] = "campaign_running"
+        log("running: " + " ".join(cmd))
+        result = subprocess.run(cmd, cwd=str(WORKDIR))
+        STATE["stage"] = "campaign_done"
+        print("campaign finished rc=" + str(result.returncode), flush=True)
+    except Exception as e:
+        STATE["stage"] = "bootstrap_exception"
+        STATE["error"] = repr(e)
+        log("bootstrap error: " + repr(e))
+
+
+# Start HTTP server in background thread; main thread runs campaign.
 threading.Thread(
     target=lambda: S(("0.0.0.0", ART_PORT), H).serve_forever(),
     daemon=True,
 ).start()
 log("http server on 0.0.0.0:" + str(ART_PORT))
+time.sleep(2.0)  # let the server bind before we do anything slow
 
 if os.environ.get("HF_TOKEN"):
     log("HF_TOKEN present")
 
-log("installing uv")
-subprocess.run(
-    [sys.executable, "-m", "pip", "install", "--quiet", "--no-cache-dir", "uv"],
-    check=True,
-)
+run_campaign()
 
-log("cloning repo: " + REPO_URL + " branch=" + BRANCH)
-WORKDIR.parent.mkdir(parents=True, exist_ok=True)
-if not WORKDIR.exists():
-    subprocess.run(
-        ["git", "clone", "--depth", "1", "--branch", BRANCH, REPO_URL, str(WORKDIR)],
-        check=True,
-    )
-
-cmd = [
-    "uv", "run", "python", "scripts/campaign_runner.py",
-    "--config", CONFIG,
-    "--model", MODEL,
-    "--ref-port", str(REF_PORT),
-]
-if MAX_TRIALS is not None:
-    cmd.extend(["--max-trials", str(MAX_TRIALS)])
-
-log("running: " + " ".join(cmd))
-result = subprocess.run(cmd, cwd=str(WORKDIR))
-print("campaign finished rc=" + str(result.returncode), flush=True)
-
-log("keeping http server alive for artifact download")
+log("keeping http server alive for artifact download and log inspection")
 while True:
     time.sleep(60)
 """

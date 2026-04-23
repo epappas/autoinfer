@@ -13,16 +13,17 @@ def test_bootstrap_source_is_ascii_only() -> None:
 def test_bootstrap_source_is_small() -> None:
     """Bootstrap must stay small so the deploy-time validator accepts it."""
     src = CampaignSpec().build_source()
-    # generous ceiling; current size is ~2.5 KB
-    assert len(src) < 4000, f"bootstrap too large: {len(src)} chars"
+    assert len(src) < 5000, f"bootstrap too large: {len(src)} chars"
 
 
-def test_bootstrap_starts_http_server_before_install() -> None:
+def test_bootstrap_starts_http_server_thread_before_calling_run_campaign() -> None:
+    """Regression: HTTP must be up before any pip install / git clone so
+    basilica's startup probe succeeds even if those steps are slow/fail."""
     src = CampaignSpec().build_source()
-    # HTTP thread must be started BEFORE the pip install + clone calls
     http_idx = src.index("serve_forever")
-    pip_idx = src.index("pip")
-    assert http_idx < pip_idx
+    # find the top-level call (preceded by newline), not the `def` line
+    run_idx = src.index("\nrun_campaign()")
+    assert http_idx < run_idx, "HTTP server thread must start before run_campaign()"
 
 
 def test_bootstrap_handler_always_returns_200_for_get() -> None:
