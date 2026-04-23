@@ -32,7 +32,7 @@ policy:
 layers:
   l1_engine:
     model: Qwen/Qwen3-8B
-    knobs_path: ../../src/autoinfer/layers/l1_engine/knobs.yaml
+    knobs_path: src/autoinfer/layers/l1_engine/knobs.yaml
     max_trials: 40
     candidate_port: 8000
     startup_timeout_s: 600
