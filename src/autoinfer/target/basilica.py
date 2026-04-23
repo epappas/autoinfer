@@ -50,37 +50,35 @@ def log(msg):
 
 class H(http.server.BaseHTTPRequestHandler):
     def do_GET(self):
-        if self.path == "/health":
-            self._r(200, b"ok", "text/plain")
-            return
         runs = WORKDIR / "runs"
+        # serve an actual file under runs/ if it matches
         rel = self.path.lstrip("/")
-        if not runs.exists() or rel in ("", "/"):
-            items = []
-            if runs.exists():
-                for p in sorted(runs.rglob("*.json")):
-                    r = p.relative_to(runs).as_posix()
-                    items.append('<li><a href="' + r + '">' + r + "</a></li>")
-            body = ("<ul>" + "".join(items) + "</ul>").encode()
-            self._r(200, body, "text/html")
-            return
-        target = (runs / rel).resolve()
-        if not str(target).startswith(str(runs.resolve())):
-            self._r(403, b"forbidden", "text/plain")
-            return
-        if not target.is_file():
-            self._r(404, b"not found", "text/plain")
-            return
-        data = target.read_bytes()
-        ctype = "application/json" if target.suffix == ".json" else "application/octet-stream"
-        self._r(200, data, ctype)
+        if runs.exists() and rel and rel not in ("/",):
+            target = (runs / rel).resolve()
+            if str(target).startswith(str(runs.resolve())) and target.is_file():
+                data = target.read_bytes()
+                ctype = "application/json" if target.suffix == ".json" else "application/octet-stream"
+                self._r(200, data, ctype)
+                return
+        # default: 200 with a runs-index listing (or placeholder)
+        items = []
+        if runs.exists():
+            for p in sorted(runs.rglob("*.json")):
+                r = p.relative_to(runs).as_posix()
+                items.append('<li><a href="' + r + '">' + r + "</a></li>")
+        body = ("<html><body>ok<ul>" + "".join(items) + "</ul></body></html>").encode()
+        self._r(200, body, "text/html")
+
+    def do_HEAD(self):
+        self._r(200, b"", "text/plain")
 
     def _r(self, code, body, ctype):
         self.send_response(code)
         self.send_header("Content-Type", ctype)
         self.send_header("Content-Length", str(len(body)))
         self.end_headers()
-        self.wfile.write(body)
+        if body:
+            self.wfile.write(body)
 
     def log_message(self, *a, **kw):
         pass

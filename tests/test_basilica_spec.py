@@ -25,9 +25,15 @@ def test_bootstrap_starts_http_server_before_install() -> None:
     assert http_idx < pip_idx
 
 
-def test_bootstrap_exposes_health_endpoint() -> None:
+def test_bootstrap_handler_always_returns_200_for_get() -> None:
+    """The handler must 200 on every GET during bootstrap so any
+    health-check path Basilica probes succeeds."""
     src = CampaignSpec().build_source()
-    assert '"/health"' in src
+    # must implement do_GET and do_HEAD; must not have 404 or 403 fast-paths
+    assert "do_GET" in src
+    assert "do_HEAD" in src
+    # runs-not-found path must still yield 200
+    assert 'self._r(200, body, "text/html"' in src
 
 
 def test_bootstrap_uses_pip_not_curl_pipe() -> None:
