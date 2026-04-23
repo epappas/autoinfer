@@ -39,24 +39,42 @@ _TPOT_KEYS = {
 
 def _first_present(payload: dict[str, Any], keys: tuple[str, ...]) -> float:
     for k in keys:
-        if k in payload and payload[k] is not None:
-            return float(payload[k])
+        v = payload.get(k)
+        if v is not None:
+            try:
+                return float(v)
+            except (TypeError, ValueError):
+                continue
     return 0.0
 
 
+def _num(value: Any, default: float = 0.0) -> float:
+    """Coerce ``value`` to float, substituting ``default`` for None/missing."""
+    if value is None:
+        return default
+    try:
+        return float(value)
+    except (TypeError, ValueError):
+        return default
+
+
 def parse_bench_output(payload: dict[str, Any]) -> DriverResult:
-    """Parse ``vllm bench serve --save-result`` JSON payload."""
-    tok = payload.get("output_throughput")
-    if tok is None:
-        tok = payload.get("total_token_throughput", 0.0)
+    """Parse ``vllm bench serve --save-result`` JSON payload.
+
+    Every value extraction is None-safe because vLLM's bench emits
+    null for percentile fields when it lacks enough samples, and for
+    `request_goodput` when no SLO was supplied.
+    """
+    tok = payload.get("output_throughput") or payload.get("total_token_throughput")
+    goodput = payload.get("request_goodput")
+    if goodput is None:
+        goodput = payload.get("request_throughput")
     return DriverResult(
-        tokens_per_sec=float(tok),
-        request_throughput=float(payload.get("request_throughput", 0.0)),
+        tokens_per_sec=_num(tok),
+        request_throughput=_num(payload.get("request_throughput")),
         ttft_ms={p: _first_present(payload, keys) for p, keys in _TTFT_KEYS.items()},
         tpot_ms={p: _first_present(payload, keys) for p, keys in _TPOT_KEYS.items()},
-        goodput_req_per_sec=float(
-            payload.get("request_goodput", payload.get("request_throughput", 0.0))
-        ),
+        goodput_req_per_sec=_num(goodput),
         raw=payload,
     )
 
