@@ -9,7 +9,7 @@ implementation — and whose **frozen evaluation** is a workload trace plus a
 quality gate. An LLM-guided keep-discard loop over these layers, applied to
 **vLLM** as the engine substrate and **Basilica** as the deployment substrate,
 produces configurations that dominate hand-tuned defaults on at least one of
-(tokens/\$, tokens/s, p99 TPOT, effective context) with no measurable quality
+(tokens/s, p99 TPOT, peak HBM, effective context) with no measurable quality
 regression. The largest gains sit where heterogeneity is irreducible — the
 layer of search that existing tools (llm-d, SGLang, AutoKernel) each address
 in isolation but none unify.
@@ -53,9 +53,12 @@ Committed on the basis of user constraints, not academic defensibility:
 | context length | max input tokens before TPOT cliff | attention quadratic wall |
 | quality | task score, logit divergence vs FP reference, batch invariance | silent regression |
 
-Add one derived axis for L2: **tokens/\$** — throughput divided by the
-Basilica hourly price of the deployed topology. This is the metric that makes
-heterogeneous search economically meaningful.
+No dollar axis in the ledger. Time-to-compute is the objective at every
+layer; `\$/token` is a post-hoc derivation outside the search loop, computed
+only when someone needs it, using an externally-supplied `(gpu_class, \$/hr)`
+table. The thesis does not commit to a dollar oracle — throughput (tokens
+per GPU-second) and memory carry all the hardware-economic signal we need
+in-loop.
 
 ## 4. The three-layer model
 
@@ -97,7 +100,9 @@ feature-flag flips (e.g. switch attention backend), not source edits.
 | Asymmetric quantization | prefill FP16, decode FP8/AWQ | degrade at the memory bottleneck |
 | Replicas | per-role scaling | throughput at cost |
 
-**Primary objective changes at L2:** tokens/\$ at quality, not tokens/s.
+**Primary objective at L2:** tokens per GPU-second at quality. Dollar cost
+is derived post-hoc from an externally-supplied `\$/hr` table if the caller
+needs a currency figure; the ledger itself never touches currency.
 
 **Harness.** vLLM with Ray/torch.distributed on Basilica for homogeneous
 multi-node; llm-d on top when PD-disagg + routing matter. Extended metrics:
