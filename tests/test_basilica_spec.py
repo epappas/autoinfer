@@ -12,10 +12,27 @@ def test_default_spec_source_contains_expected_phases() -> None:
     assert "prepare_data()" in src
     assert "start_reference()" in src
     assert "run_campaign()" in src
-    assert "serve_artifacts_forever()" in src
     assert "summarize()" in src
+    # http server must start BEFORE slow steps so basilica health-check passes
+    assert "start_status_server()" in src
     # completion marker the orchestrator tails for
     assert "campaign finished rc=" in src
+
+
+def test_source_starts_http_server_before_install() -> None:
+    """Regression: basilica health-checks /health during startup; the
+    server must be up before install_uv (which can take minutes)."""
+    src = CampaignSpec().build_source()
+    start_idx = src.index("start_status_server()")
+    install_idx = src.index("install_uv()")
+    # start must appear strictly before install in the main() ordering
+    assert start_idx < install_idx
+
+
+def test_source_exposes_health_and_status_endpoints() -> None:
+    src = CampaignSpec().build_source()
+    assert '"/health"' in src
+    assert '"/status"' in src
 
 
 def test_source_pins_config_and_model() -> None:
