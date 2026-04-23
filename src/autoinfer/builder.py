@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import json
 import os
+import uuid
 from pathlib import Path
 from typing import Any
 
@@ -25,6 +26,7 @@ from autoinfer.policy import (
     OptunaSurrogate,
     ProposalLLM,
 )
+from autoinfer.telemetry import EventLog, capture_hw_context, write_hw_context
 
 
 def build_runner(
@@ -41,13 +43,30 @@ def build_runner(
     # and each can take several seconds.
     prompts = prompts[: cfg.harness.gate.smoke_prompts]
 
+    effective_max_kl = cfg.harness.gate.max_kl
+    if cfg.harness.gate.calibrate_self_kl:
+        from autoinfer.harness.gate import calibrate_self_kl
+
+        try:
+            stats = calibrate_self_kl(
+                endpoint=cfg.harness.gate.replica_uri,
+                model=l1_cfg.model,
+                prompts=prompts,
+            )
+            effective_max_kl = stats["p95"] * cfg.harness.gate.calibration_multiplier
+            # keep a lower floor so we still catch gross drift even if self
+            # noise is extremely low
+            effective_max_kl = max(effective_max_kl, 0.1)
+        except Exception as e:  # noqa: BLE001
+            print(f"[builder] self-kl calibration failed: {e}; using config max_kl", flush=True)
+
     adapter = L1EngineAdapter(
         model=l1_cfg.model,
         catalog=catalog,
         trace_path=cfg.harness.driver.trace_path,
         reference_uri=cfg.harness.gate.replica_uri,
         quality_prompts=prompts,
-        max_kl=cfg.harness.gate.max_kl,
+        max_kl=effective_max_kl,
         result_dir=cfg.harness.ledger.output_dir,
         batch_sizes=cfg.harness.gate.batch_sizes,
         candidate_port=l1_cfg.candidate_port,
@@ -89,17 +108,43 @@ def build_runner(
         warmstart=warmstart,
         max_trials=max_trials,
         warmstart_n=cfg.policy.warmstart.n_configs,
+        warmstart_prior=cfg.policy.warmstart.hardware_notes or "",
     )
+    ledger_dir = Path(cfg.harness.ledger.output_dir)
     ledger = Ledger(
-        output_dir=cfg.harness.ledger.output_dir,
+        output_dir=ledger_dir,
         pareto_axes=cfg.harness.ledger.pareto_axes,
     )
+
+    # Rich telemetry — event log + hw context snapshot at run start
+    run_id = uuid.uuid4().hex[:12]
+    events = EventLog(ledger_dir / "events.jsonl", run_id=run_id)
+    hw_ctx = capture_hw_context()
+    write_hw_context(ledger_dir / "hw_context.json", hw_ctx)
+    events.emit(
+        "config_loaded",
+        name=cfg.name,
+        model=l1_cfg.model,
+        max_trials=max_trials,
+        warmstart_provider=cfg.policy.warmstart.provider,
+        warmstart_model=cfg.policy.warmstart.llm_model,
+        surrogate_kind=cfg.policy.surrogate.kind,
+        operator_cadence=cfg.policy.operator.cadence if cfg.policy.operator else None,
+        gpus=[g.get("name") for g in (hw_ctx.get("gpus") or [])],
+        vllm_version=hw_ctx.get("vllm_version"),
+        autoinfer_version=hw_ctx.get("autoinfer_version"),
+        max_kl_configured=cfg.harness.gate.max_kl,
+        max_kl_effective=effective_max_kl,
+        self_kl_calibrated=cfg.harness.gate.calibrate_self_kl,
+    )
+
     runner = ContinuousRunner(
         scheduler=LayerScheduler({"l1_engine": spec}),
         ledger=ledger,
         objective_axis="tokens_per_sec",
         maximize=True,
         operator=operator,
+        events=events,
     )
     return runner, ledger
 

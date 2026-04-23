@@ -134,6 +134,43 @@ def _concurrent_first(
         return futures[0].result()
 
 
+def calibrate_self_kl(
+    endpoint: str,
+    model: str,
+    prompts: list[str],
+    top_k: int = 5,
+    max_tokens: int = 32,
+    concurrency: int = 4,
+) -> dict[str, float]:
+    """Gate the endpoint against itself to measure noise-floor KL.
+
+    Two sequential calls to the SAME endpoint for each prompt; any KL is
+    pure scheduling/batch-composition noise, not real drift. Returns a
+    summary dict with ``mean, median, p95, max, n``. Use to set
+    ``max_kl`` as ``multiplier * p95`` so real config-induced drift
+    remains distinguishable from load noise.
+    """
+    if not prompts:
+        raise ValueError("prompts must be non-empty")
+
+    def _pair(prompt: str) -> float:
+        a = fetch_logprobs(endpoint, model, prompt, top_k, max_tokens)
+        b = fetch_logprobs(endpoint, model, prompt, top_k, max_tokens)
+        return topk_kl_divergence(a, b)
+
+    with concurrent.futures.ThreadPoolExecutor(max_workers=concurrency) as ex:
+        per = sorted(ex.map(_pair, prompts))
+    n = len(per)
+    p95 = per[int(n * 0.95)] if n >= 20 else per[-1]
+    return {
+        "n": float(n),
+        "mean": sum(per) / n,
+        "median": per[n // 2],
+        "p95": p95,
+        "max": per[-1],
+    }
+
+
 def run_gate(
     candidate_endpoint: str,
     reference_endpoint: str,

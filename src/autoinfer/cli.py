@@ -11,12 +11,19 @@ session-four concern.
 from __future__ import annotations
 
 import os
+import time
 from pathlib import Path
 
 import typer
 
 from autoinfer.builder import build_runner
 from autoinfer.config import RunConfig, load_config
+from autoinfer.telemetry import (
+    build_run_summary,
+    capture_hw_context,
+    write_results_tsv,
+    write_run_summary,
+)
 
 app = typer.Typer(add_completion=False, no_args_is_help=True)
 
@@ -41,8 +48,28 @@ def run(
     """Execute a run end-to-end."""
     cfg = _load_checked(config_path)
     runner, ledger = build_runner(cfg, max_trials_override=max_trials)
+    start = time.monotonic()
     front = runner.run()
-    typer.echo(f"finished: {len(ledger.entries())} trials, {len(front)} pareto entries")
+    elapsed = time.monotonic() - start
+
+    # Write article-grade summaries alongside the per-trial JSONs.
+    ledger_dir = Path(cfg.harness.ledger.output_dir)
+    entries = list(ledger.entries())
+    try:
+        write_results_tsv(ledger_dir / "results.tsv", entries)
+        hw = capture_hw_context()
+        summary = build_run_summary(
+            run_id=getattr(runner.events, "run_id", "unknown") if runner.events else "unknown",
+            entries=entries,
+            pareto=front,
+            hw_context=hw,
+            elapsed_s=elapsed,
+        )
+        write_run_summary(ledger_dir / "run_summary.json", summary)
+    except Exception as e:  # noqa: BLE001
+        typer.secho(f"[cli] telemetry write failed: {e}", fg=typer.colors.YELLOW, err=True)
+
+    typer.echo(f"finished: {len(entries)} trials, {len(front)} pareto entries, {elapsed:.0f}s")
     for i, entry in enumerate(front):
         typer.echo(f"  [{i}] {entry.trial_id} layer={entry.layer}")
         if entry.measurement is not None:

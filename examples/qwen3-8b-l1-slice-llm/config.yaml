@@ -19,7 +19,11 @@ harness:
     smoke_prompts: 20
     full_prompts: 500
     batch_sizes: [1]
+    # max_kl overridden at run start by self-self calibration x multiplier;
+    # kept here as a floor if calibration fails.
     max_kl: 2.0
+    calibrate_self_kl: true
+    calibration_multiplier: 5.0
   ledger:
     output_dir: ./runs/qwen3-8b-l1-slice-llm
     pareto_axes: [tokens_per_sec, tpot_p99_ms, peak_hbm_gb]
@@ -31,6 +35,17 @@ policy:
     llm_model: anthropic/claude-sonnet-4
     n_configs: 6
     api_key_env: OPENROUTER_API_KEY
+    hardware_notes: |
+      GPU: 2x NVIDIA RTX A6000 (Ampere sm_86, 48 GB each, ~116 GB system RAM).
+      Interconnect: PCIe Gen4, no NVLink. Driver and CUDA runtime for 12.4.
+      Hard incompat rules on this hardware:
+        - kv_cache_dtype in {fp8, fp8_e4m3, fp8_e5m2} requires Hopper+ (H100, H200, Blackwell). FAILS on Ampere.
+        - quantization=fp8 requires Hopper+. FAILS on Ampere.
+        - attention_backend=XFORMERS is fallback-only and typically slower than FLASH_ATTN / FLASHINFER on this hardware.
+      Empirically fast regions on this hardware:
+        - FLASHINFER with kv_cache_dtype=auto: ~2x throughput of FLASH_ATTN at baseline.
+        - FLASH_ATTN with enable_prefix_caching=True on ShareGPT-like shared-prefix workloads: recovers most of FLASHINFER's gain.
+      Avoid redundant exploration of the default region (FLASH_ATTN, kv=auto, prefix=False, batched=2048, seqs=128) — that is the baseline we are trying to beat.
   surrogate:
     kind: tpe
     seed: 0
@@ -45,7 +60,7 @@ layers:
   l1_engine:
     model: Qwen/Qwen3-8B
     knobs_path: src/autoinfer/layers/l1_engine/knobs.yaml
-    max_trials: 20
+    max_trials: 50
     candidate_port: 8000
     startup_timeout_s: 600
 

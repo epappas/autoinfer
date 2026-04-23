@@ -30,22 +30,33 @@ def build_prompt(
     prior_notes: str,
     history: list[dict[str, Any]],
 ) -> str:
-    """Compose the proposer prompt. Pure; used by all provider classes."""
+    """Compose the proposer prompt. Pure; used by all provider classes.
+
+    The caller is expected to fold hardware-compat information into
+    ``prior_notes`` (GPU class, supported precisions, known-broken knob
+    combinations on this hardware). Without it the proposer will happily
+    explore infeasible regions — observed empirically in the 20-trial
+    Sonnet 4 campaign where FP8 on Ampere was proposed repeatedly.
+    """
     surface_json = json.dumps(surface, indent=2, default=str, sort_keys=True)
-    tail = history[-20:] if history else []
+    tail = history[-30:] if history else []
     history_json = json.dumps(tail, indent=2, default=str, sort_keys=True)
     notes = prior_notes.strip() or "(none)"
     return (
-        "You are proposing configurations for an LLM inference-engine "
-        "search loop. Pick values that explore the search surface "
-        "informatively given the trial history.\n\n"
+        "You are proposing vLLM engine-configuration variants for an LLM "
+        "inference-engine search. Every proposal that crashes or fails a "
+        "quality gate is wasted budget; the trial history shows which "
+        "regions already failed and why. Exploit what works, explore "
+        "genuinely new regions, avoid configurations the notes or history "
+        "indicate are infeasible on this hardware.\n\n"
         f"Search surface (knob -> type and range or values):\n"
         f"```json\n{surface_json}\n```\n\n"
-        f"Prior notes: {notes}\n\n"
-        f"Recent trial history (last 20 trials):\n```json\n{history_json}\n```\n\n"
-        f"Propose exactly {n} configurations. Each configuration is a JSON "
-        "object mapping knob name to a value drawn from the surface. "
-        "Return ONLY a JSON array of objects with no surrounding prose. "
+        f"Hardware and compatibility notes:\n{notes}\n\n"
+        f"Recent trial history (last {len(tail)} trials):\n"
+        f"```json\n{history_json}\n```\n\n"
+        f"Propose exactly {n} configurations. Each is a JSON object "
+        "mapping knob name to a value drawn from the surface. Return "
+        "ONLY a JSON array of objects with no surrounding prose. "
         "Example format:\n"
         '```json\n[{"knob_a": 42, "knob_b": "foo"}]\n```\n'
     )

@@ -16,6 +16,7 @@ from __future__ import annotations
 
 from collections.abc import Callable
 from dataclasses import dataclass, field
+from typing import Any
 
 from autoinfer.controller.stale import LayerScheduler, LayerSpec, history_projection
 from autoinfer.harness.ledger import Entry, Ledger
@@ -60,21 +61,30 @@ class ContinuousRunner:
     stall_threshold: int = 8
     operator: Operator | None = None
     stop: StopCallable | None = None
+    events: Any = None  # optional telemetry.EventLog; typed-as-Any to avoid circular import
 
     def __post_init__(self) -> None:
         self._tid_idx: dict[str, int] = dict.fromkeys(self.scheduler.specs, 0)
         self._stall = StallTracker(self.stall_threshold)
         self._trials_since_operator: dict[str, int] = dict.fromkeys(self.scheduler.specs, 0)
 
+    def _event(self, type_: str, **fields: object) -> None:
+        if self.events is not None:
+            self.events.emit(type_, **fields)
+
     def run(self) -> list[Entry]:
+        self._event("run_start", layers=list(self.scheduler.specs.keys()))
         while True:
             layer = self.scheduler.pick_layer(self.ledger)
             if layer is None:
                 break
             if self.stop is not None and self.stop(self.ledger):
+                self._event("stop_callable_fired")
                 break
             self._step(layer)
-        return self.ledger.pareto_front()
+        front = self.ledger.pareto_front()
+        self._event("run_end", n_entries=len(self.ledger.entries()), pareto_size=len(front))
+        return front
 
     def _step(self, layer: str) -> None:
         spec = self.scheduler.specs[layer]
@@ -94,11 +104,12 @@ class ContinuousRunner:
             prior_notes=spec.warmstart_prior,
             history=history_projection(self.ledger, layer),
         )
+        self._event("warmstart_batch", layer=layer, n=len(configs))
         for cfg in configs:
             if not self.scheduler.has_budget(layer):
                 return
             tid = self._next_tid(layer, prefix="w")
-            self._execute(layer, spec, tid, cfg, surrogate_tid=None)
+            self._execute(layer, spec, tid, cfg, surrogate_tid=None, phase="warmstart")
 
     def _run_operator_batch(self, layer: str, spec: LayerSpec) -> None:
         assert self.operator is not None
@@ -108,18 +119,24 @@ class ContinuousRunner:
             prior_notes=spec.warmstart_prior,
             history=history_projection(self.ledger, layer),
         )
+        self._event(
+            "operator_call", layer=layer, n=len(configs),
+            stalled=self._stall.stalled(layer),
+            trials_since_last=self._trials_since_operator.get(layer, 0),
+        )
         for cfg in configs:
             if not self.scheduler.has_budget(layer):
                 return
             tid = self._next_tid(layer, prefix="o")
-            self._execute(layer, spec, tid, cfg, surrogate_tid=None)
+            self._execute(layer, spec, tid, cfg, surrogate_tid=None, phase="operator")
         self._trials_since_operator[layer] = 0
         self._stall.reset(layer)
 
     def _run_surrogate_trial(self, layer: str, spec: LayerSpec) -> None:
         sugg = spec.surrogate.suggest()
         tid = self._next_tid(layer, prefix="s")
-        self._execute(layer, spec, tid, sugg.config, surrogate_tid=sugg.trial_id)
+        self._event("surrogate_ask", layer=layer, trial_id=tid, optuna_id=sugg.trial_id)
+        self._execute(layer, spec, tid, sugg.config, surrogate_tid=sugg.trial_id, phase="surrogate")
 
     def _execute(
         self,
@@ -128,8 +145,13 @@ class ContinuousRunner:
         tid: str,
         cfg: dict[str, object],
         surrogate_tid: str | None,
+        phase: str = "unknown",
     ) -> None:
+        import time as _time
+        start = _time.monotonic()
+        self._event("trial_start", layer=layer, trial_id=tid, phase=phase, config=cfg)
         out = spec.adapter.run(TrialInput(trial_id=tid, config=cfg))
+        elapsed = _time.monotonic() - start
         entry = Entry(
             trial_id=tid,
             layer=layer,
@@ -144,6 +166,21 @@ class ContinuousRunner:
         self.scheduler.notify_trial_done(layer)
         self._trials_since_operator[layer] = self._trials_since_operator.get(layer, 0) + 1
         self._stall.record(layer, self._score(entry))
+        self._event(
+            "trial_complete",
+            layer=layer, trial_id=tid, phase=phase, elapsed_s=elapsed,
+            outcome=("kept" if entry.kept else ("failure:" + out.failure.kind.value if out.failure else "stale")),
+            measurement=(
+                {
+                    "tokens_per_sec": out.measurement.tokens_per_sec,
+                    "ttft_p99_ms": out.measurement.ttft_p99_ms,
+                    "tpot_p99_ms": out.measurement.tpot_p99_ms,
+                    "peak_hbm_gb": out.measurement.peak_hbm_gb,
+                    "kl_divergence": out.measurement.kl_divergence,
+                } if out.measurement else None
+            ),
+            failure_kind=(out.failure.kind.value if out.failure else None),
+        )
 
     def _score(self, entry: Entry) -> float | None:
         if entry.measurement is None:

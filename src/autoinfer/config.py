@@ -44,6 +44,15 @@ class QualityGateConfig(_Base):
     full_prompts: int = Field(ge=1, default=500)
     batch_sizes: tuple[int, ...] = (1, 8, 64)
     max_kl: float = Field(gt=0.0, description="Reject if per-token KL exceeds this.")
+    calibrate_self_kl: bool = Field(
+        default=False,
+        description="If true, run reference-vs-self gate at startup and override max_kl.",
+    )
+    calibration_multiplier: float = Field(
+        default=10.0,
+        gt=1.0,
+        description="max_kl = multiplier * self-self p95 after calibration.",
+    )
 
 
 class LedgerConfig(_Base):
@@ -68,6 +77,14 @@ class WarmstartConfig(_Base):
     seed_configs: list[dict[str, Any]] | None = Field(
         default=None,
         description="Configs for provider='deterministic'. Required in that mode.",
+    )
+    hardware_notes: str | None = Field(
+        default=None,
+        description=(
+            "Hardware + compatibility facts threaded into the LLM prompt. "
+            "Freeform prose. Example: 'GPU: 2x RTX A6000 (Ampere, 48GB). "
+            "FP8 KV unsupported. No NVLink; PCIe only.'"
+        ),
     )
 
 
