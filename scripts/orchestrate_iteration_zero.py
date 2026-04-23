@@ -79,6 +79,7 @@ def _parse_args() -> argparse.Namespace:
     p.add_argument("--artifacts-dir", type=Path, default=Path("./basilica-artifacts"))
     p.add_argument("--log-file", type=Path, default=None)
     p.add_argument("--keep-after-done", action="store_true", help="Don't auto-delete on success.")
+    p.add_argument("--retries", type=int, default=3, help="Retry count for transient deploy failures.")
     return p.parse_args()
 
 
@@ -182,6 +183,42 @@ def _summarize_artifacts(artifacts_dir: Path) -> None:
     print(f"[orchestrator] {len(files)} artifacts: {kept} with measurements, {failed} failures")
 
 
+def _extract_instance_name(exc: Exception) -> str | None:
+    """Pull the Basilica instance name out of a DeploymentFailed message."""
+    msg = str(exc)
+    import re
+    m = re.search(r"'([0-9a-f-]{36})'", msg)
+    return m.group(1) if m else None
+
+
+def _create_with_retry(client: Any, kwargs: dict[str, Any], retries: int) -> Deployment:
+    """Wrap client.deploy in a retry loop — Basilica spot scheduling is flaky.
+
+    On DeploymentFailed, extract the leaked instance_name and delete it
+    before the next attempt so we do not accumulate failed deployments.
+    """
+    import basilica.exceptions as bexc
+
+    last_exc: Exception | None = None
+    for attempt in range(1, retries + 2):
+        print(f"[orchestrator] deploy attempt {attempt}/{retries + 1}")
+        try:
+            return client.deploy(**kwargs)
+        except bexc.DeploymentFailed as e:
+            last_exc = e
+            iname = _extract_instance_name(e)
+            print(f"[orchestrator] attempt {attempt} failed: {iname or '(unknown)'}")
+            if iname:
+                try:
+                    client.delete_deployment(iname)
+                    print(f"[orchestrator] cleaned up {iname}")
+                except Exception as de:  # noqa: BLE001
+                    print(f"[orchestrator] cleanup {iname} failed: {de}")
+            if attempt <= retries:
+                time.sleep(15.0)
+    raise last_exc if last_exc else RuntimeError("retry loop exited without exception")
+
+
 def main() -> int:
     args = _parse_args()
     spec = _build_spec(args)
@@ -209,18 +246,15 @@ def main() -> int:
 
     print(f"[orchestrator] creating deployment: {args.name}")
     print(f"[orchestrator] image={args.image} gpus={args.gpus} memory={args.memory} ttl={ttl_seconds}s")
-    deployment = client.deploy(**kwargs)
+
+    try:
+        deployment = _create_with_retry(client, kwargs, retries=args.retries)
+    except Exception as e:  # noqa: BLE001
+        print(f"[orchestrator] all deploy attempts failed: {e}", file=sys.stderr)
+        return 3
     print(f"[orchestrator] deployment.url: {deployment.url}")
 
     signal.signal(signal.SIGINT, lambda *_: _cleanup_and_exit(deployment, args))
-
-    try:
-        deployment.wait_until_ready(timeout=kwargs["timeout"])
-    except Exception as e:  # noqa: BLE001
-        print(f"[orchestrator] wait_until_ready failed: {e}", file=sys.stderr)
-        if not args.keep_after_done:
-            deployment.delete()
-        return 3
 
     print("[orchestrator] deployment ready, tailing logs...")
     done = _stream_logs(deployment, args.log_file)
