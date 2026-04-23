@@ -106,12 +106,12 @@ class OpenAICompatibleProposalLLM:
         kwargs: dict[str, Any] = {"timeout": self.timeout_s}
         if self.transport is not None:
             kwargs["transport"] = self.transport
+        # Follow OpenAI SDK convention: base_url includes the API version
+        # (e.g. https://api.openai.com/v1, https://openrouter.ai/api/v1,
+        # http://vllm-host:port/v1) and we append only /chat/completions.
+        url = f"{self.base_url.rstrip('/')}/chat/completions"
         with httpx.Client(**kwargs) as client:
-            resp = client.post(
-                f"{self.base_url.rstrip('/')}/v1/chat/completions",
-                headers=headers,
-                json=body,
-            )
+            resp = client.post(url, headers=headers, json=body)
             resp.raise_for_status()
             payload = resp.json()
         text = payload["choices"][0]["message"]["content"]

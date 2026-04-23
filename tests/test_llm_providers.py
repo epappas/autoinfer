@@ -93,7 +93,7 @@ def test_openai_compatible_sends_correct_request() -> None:
 
     transport = httpx.MockTransport(handler)
     llm = OpenAICompatibleProposalLLM(
-        base_url="https://api.example.com",
+        base_url="https://api.example.com/v1",
         model="test-model",
         api_key="sk-test",
         transport=transport,
@@ -108,7 +108,10 @@ def test_openai_compatible_sends_correct_request() -> None:
     assert len(captured) == 1
     req = captured[0]
     assert req["method"] == "POST"
-    assert "v1/chat/completions" in req["url"]
+    # base_url already contains /v1; we append only /chat/completions
+    assert req["url"].endswith("/v1/chat/completions")
+    # ensure we did NOT double-prefix (https://.../v1/v1/chat/completions)
+    assert req["url"].count("/v1/") == 1
     assert req["auth_header"] == "Bearer sk-test"
     assert req["body"]["model"] == "test-model"
     assert req["body"]["messages"][0]["role"] == "user"
