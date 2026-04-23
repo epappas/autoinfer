@@ -100,7 +100,21 @@ def build_runner(
 
 def _build_warmstart(wcfg: WarmstartConfig, catalog: KnobCatalog) -> ProposalLLM:
     if wcfg.provider == "deterministic":
-        seeds = wcfg.seed_configs or [defaults(catalog)]
+        if wcfg.seed_configs:
+            seeds = wcfg.seed_configs
+        else:
+            # diversify from the defaults so warmstart trials differ
+            base = defaults(catalog)
+            seeds = [
+                base,
+                {**base, "attention_backend": "FLASHINFER"},
+                {**base, "kv_cache_dtype": "fp8", "attention_backend": "FLASHINFER"},
+                {**base, "enable_prefix_caching": True},
+                {**base, "max_num_batched_tokens": 8192},
+                {**base, "max_num_seqs": 256},
+                {**base, "gpu_memory_utilization": 0.85},
+                {**base, "block_size": 32},
+            ]
         return DeterministicProposalLLM(seeds)
     if wcfg.provider == "anthropic":
         return AnthropicProposalLLM(

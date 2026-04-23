@@ -92,22 +92,9 @@ knobs:
     axis: throughput
     description: Attention kernel selection (via env var).
 
-  num_scheduler_steps:
-    type: categorical
-    values: [1, 2, 4, 8]
-    default: 1
-    vllm_cli: --num-scheduler-steps
-    axis: throughput
-    description: Number of decode steps per scheduler iteration.
-
-  swap_space:
-    type: categorical
-    values: [0, 4, 8]
-    default: 4
-    vllm_cli: --swap-space
-    coupled_with: [preemption_mode]
-    axis: memory
-    description: CPU swap budget in GiB per worker for preempted KV blocks.
+  # num_scheduler_steps and swap_space were removed in vLLM V1 CLI;
+  # kept documented in docs/research/raw/knobs-l1-engine.md for reference
+  # but excluded from the live search surface.
 
   dtype:
     type: categorical
