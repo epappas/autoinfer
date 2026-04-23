@@ -71,7 +71,7 @@ def _parse_args() -> argparse.Namespace:
     p.add_argument("--branch", default="main")
     p.add_argument("--repo", default="https://github.com/epappas/autoinfer.git")
     p.add_argument("--model", default="Qwen/Qwen3-8B")
-    p.add_argument("--image", default="pytorch/pytorch:2.4.1-cuda12.4-cudnn9-devel")
+    p.add_argument("--image", default="pytorch/pytorch:2.4.1-cuda12.4-cudnn9-runtime")
     p.add_argument("--gpus", type=int, default=2)
     p.add_argument("--memory", default="64Gi")
     p.add_argument("--min-gpu-memory-gb", type=int, default=40)
@@ -191,17 +191,20 @@ def _extract_instance_name(exc: Exception) -> str | None:
     return m.group(1) if m else None
 
 
-def _create_with_retry(client: Any, kwargs: dict[str, Any], retries: int) -> Deployment:
+def _create_with_retry(client: Any, base_kwargs: dict[str, Any], retries: int) -> Deployment:
     """Wrap client.deploy in a retry loop — Basilica spot scheduling is flaky.
 
-    On DeploymentFailed, extract the leaked instance_name and delete it
-    before the next attempt so we do not accumulate failed deployments.
+    On DeploymentFailed, extract the leaked instance_name and delete it,
+    then issue a fresh ``name`` for the next attempt so Basilica treats
+    it as a new deployment rather than reusing the failed instance.
     """
     import basilica.exceptions as bexc
 
     last_exc: Exception | None = None
     for attempt in range(1, retries + 2):
-        print(f"[orchestrator] deploy attempt {attempt}/{retries + 1}")
+        kwargs = dict(base_kwargs)
+        kwargs["name"] = f"{base_kwargs['name']}-t{attempt}"
+        print(f"[orchestrator] deploy attempt {attempt}/{retries + 1} name={kwargs['name']}")
         try:
             return client.deploy(**kwargs)
         except bexc.DeploymentFailed as e:
@@ -215,7 +218,7 @@ def _create_with_retry(client: Any, kwargs: dict[str, Any], retries: int) -> Dep
                 except Exception as de:  # noqa: BLE001
                     print(f"[orchestrator] cleanup {iname} failed: {de}")
             if attempt <= retries:
-                time.sleep(15.0)
+                time.sleep(20.0)
     raise last_exc if last_exc else RuntimeError("retry loop exited without exception")
 
 

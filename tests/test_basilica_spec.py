@@ -76,7 +76,7 @@ def test_deploy_kwargs_minimal() -> None:
     spec = CampaignSpec()
     kw = spec.build_deploy_kwargs(name="test-deploy")
     assert kw["name"] == "test-deploy"
-    assert kw["image"] == "pytorch/pytorch:2.4.1-cuda12.4-cudnn9-devel"
+    assert kw["image"] == "pytorch/pytorch:2.4.1-cuda12.4-cudnn9-runtime"
     assert kw["gpu_count"] == 2
     assert kw["memory"] == "64Gi"
     assert kw["storage"] is True

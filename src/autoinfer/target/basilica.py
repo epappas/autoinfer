@@ -165,7 +165,7 @@ class CampaignSpec:
     def build_deploy_kwargs(
         self,
         name: str,
-        image: str = "pytorch/pytorch:2.4.1-cuda12.4-cudnn9-devel",
+        image: str = "pytorch/pytorch:2.4.1-cuda12.4-cudnn9-runtime",
         gpu_count: int = 2,
         memory: str = "64Gi",
         storage: bool = True,
@@ -173,12 +173,28 @@ class CampaignSpec:
         timeout: int = 1800,
         min_gpu_memory_gb: int = 40,
     ) -> dict[str, Any]:
-        """Return kwargs for ``BasilicaClient.deploy``."""
+        """Return kwargs for ``BasilicaClient.deploy``.
+
+        Includes an explicit startup HealthCheckConfig with generous
+        timeouts because Basilica's default probe times out before a
+        large CUDA image has finished pulling + booting on a fresh node.
+        """
+        import basilica
+
         env = dict(self.env)
         if self.hf_token_env is not None:
             hf_token = os.environ.get(self.hf_token_env)
             if hf_token:
                 env["HF_TOKEN"] = hf_token
+        health = basilica.HealthCheckConfig(
+            startup=basilica.ProbeConfig(
+                path="/",
+                initial_delay_seconds=90,
+                period_seconds=15,
+                timeout_seconds=10,
+                failure_threshold=40,
+            ),
+        )
         return {
             "name": name,
             "source": self.build_source(),
@@ -191,4 +207,5 @@ class CampaignSpec:
             "ttl_seconds": ttl_seconds,
             "timeout": timeout,
             "env": env,
+            "health_check": health,
         }
