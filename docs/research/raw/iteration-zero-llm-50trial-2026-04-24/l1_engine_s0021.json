@@ -1,0 +1,25 @@
+{
+  "config": {
+    "attention_backend": "XFORMERS",
+    "block_size": 32,
+    "dtype": "bfloat16",
+    "enable_chunked_prefill": false,
+    "enable_prefix_caching": true,
+    "gpu_memory_utilization": 0.8149422395331908,
+    "kv_cache_dtype": "fp8_e5m2",
+    "max_num_batched_tokens": 2048,
+    "max_num_seqs": 512,
+    "quantization": "fp8"
+  },
+  "failure": {
+    "kind": "startup",
+    "layer": "l1_engine",
+    "message": "config violates 2 constraint(s): kv_fp8_requires_compatible_backend,chunked_prefill_batched_tokens_bound",
+    "metadata": {},
+    "trial_id": "l1_engine_s0021"
+  },
+  "layer": "l1_engine",
+  "measurement": null,
+  "stale": false,
+  "trial_id": "l1_engine_s0021"
+}

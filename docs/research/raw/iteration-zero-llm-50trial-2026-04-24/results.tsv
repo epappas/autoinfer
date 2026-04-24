@@ -1,0 +1,51 @@
+trial_id	layer	phase	outcome	tokens_per_sec	ttft_p99_ms	tpot_p99_ms	peak_hbm_gb	kl_divergence	failure_kind	attention_backend	kv_cache_dtype	enable_prefix_caching	enable_chunked_prefill	block_size	max_num_batched_tokens	max_num_seqs	gpu_memory_utilization	quantization	dtype
+l1_engine_o0006	l1_engine	operator	kept	433.1224632907733	16015.159503459	115.08821916167757	70.0166015625	4.144264369879705		FLASHINFER	auto	True	True	32	2048	256	0.87	none	bfloat16
+l1_engine_o0012	l1_engine	operator	kept	821.1841393950382	1473.065538131632	131.04935067861018	71.6689453125	4.46275450539331		FLASH_ATTN	auto	True	True	32	4096	128	0.89	none	bfloat16
+l1_engine_o0018	l1_engine	operator	failure:startup						startup	FLASHINFER	auto	True	False	32	4096	128	0.88	none	bfloat16
+l1_engine_o0024	l1_engine	operator	kept	721.4376165479188	1487.155523179099	101.41479442827386	68.7958984375	3.8516021393993953		FLASHINFER	auto	True	True	16	8192	64	0.86	none	float16
+l1_engine_o0030	l1_engine	operator	kept	707.913726891777	1571.0980340559036	112.38073977641741	73.3037109375	4.377928320220855		FLASHINFER	auto	False	True	32	8192	64	0.91	none	float16
+l1_engine_o0036	l1_engine	operator	kept	773.34171936991	1457.9019884765148	101.05497609513483	68.0283203125	1.3222011308836001		FLASH_ATTN	auto	True	True	16	8192	64	0.85	none	bfloat16
+l1_engine_o0042	l1_engine	operator	kept	737.5162721086235	1397.6290175318718	34.80786963831633	70.8681640625	3.5865558437875804		FLASHINFER	auto	False	True	32	16384	256	0.87	none	bfloat16
+l1_engine_o0048	l1_engine	operator	kept	733.9809761851604	1482.406306238845	121.10643825028086	68.5048828125	3.751338930609331		FLASHINFER	auto	True	True	16	4096	128	0.85	none	bfloat16
+l1_engine_s0007	l1_engine	surrogate	failure:startup						startup	FLASHINFER	fp8_e5m2	False	True	32	2048	256	0.9167235126424775	fp8	bfloat16
+l1_engine_s0008	l1_engine	surrogate	failure:startup						startup	XFORMERS	fp8_e5m2	False	True	32	8192	64	0.8855295155626819	gptq	float16
+l1_engine_s0009	l1_engine	surrogate	failure:startup						startup	XFORMERS	fp8_e5m2	True	True	16	16384	256	0.8096221244523177	awq	auto
+l1_engine_s0010	l1_engine	surrogate	failure:startup						startup	FLASH_ATTN	fp8	False	True	32	4096	128	0.9220696729553716	awq	float16
+l1_engine_s0011	l1_engine	surrogate	failure:startup						startup	FLASHINFER	fp8	True	True	16	1024	512	0.8150340330968452	none	bfloat16
+l1_engine_s0013	l1_engine	surrogate	failure:startup						startup	XFORMERS	fp8_e5m2	False	True	16	16384	32	0.9056621602885299	none	auto
+l1_engine_s0014	l1_engine	surrogate	failure:startup						startup	TRITON_ATTN	fp8_e5m2	False	True	32	2048	512	0.9485508421095056	awq	bfloat16
+l1_engine_s0015	l1_engine	surrogate	failure:startup						startup	FLASH_ATTN	fp8_e4m3	False	False	32	2048	32	0.8776068660731171	gptq	bfloat16
+l1_engine_s0016	l1_engine	surrogate	failure:startup						startup	TRITON_ATTN	auto	True	False	32	4096	128	0.8347552439706807	gptq	auto
+l1_engine_s0017	l1_engine	surrogate	failure:startup						startup	FLASH_ATTN	fp8_e4m3	False	True	16	16384	512	0.8198731452136975	gptq	float16
+l1_engine_s0019	l1_engine	surrogate	failure:startup						startup	XFORMERS	auto	False	False	32	8192	128	0.8881399452794584	awq	float16
+l1_engine_s0020	l1_engine	surrogate	failure:startup						startup	XFORMERS	fp8_e4m3	False	True	16	8192	128	0.9049433081375775	gptq	auto
+l1_engine_s0021	l1_engine	surrogate	failure:startup						startup	XFORMERS	fp8_e5m2	True	False	32	2048	512	0.8149422395331908	fp8	bfloat16
+l1_engine_s0022	l1_engine	surrogate	failure:startup						startup	FLASH_ATTN	fp8_e5m2	False	True	16	16384	32	0.8775962775803433	fp8	float16
+l1_engine_s0023	l1_engine	surrogate	failure:startup						startup	TRITON_ATTN	fp8	False	False	32	8192	64	0.8673937473031608	gptq	float16
+l1_engine_s0025	l1_engine	surrogate	failure:startup						startup	TRITON_ATTN	auto	True	False	16	8192	256	0.8372620197624456	awq	auto
+l1_engine_s0026	l1_engine	surrogate	failure:startup						startup	XFORMERS	fp8	False	False	32	1024	128	0.8036469799565237	awq	bfloat16
+l1_engine_s0027	l1_engine	surrogate	failure:startup						startup	TRITON_ATTN	fp8	True	True	32	1024	64	0.9470870199180923	gptq	auto
+l1_engine_s0028	l1_engine	surrogate	failure:startup						startup	TRITON_ATTN	fp8	True	False	32	8192	256	0.8456669546521067	none	float16
+l1_engine_s0029	l1_engine	surrogate	failure:startup						startup	XFORMERS	fp8_e4m3	True	False	32	16384	512	0.9146842961536563	fp8	bfloat16
+l1_engine_s0031	l1_engine	surrogate	failure:startup						startup	FLASHINFER	auto	True	False	16	4096	256	0.8685588141997052	none	float16
+l1_engine_s0032	l1_engine	surrogate	failure:startup						startup	FLASH_ATTN	fp8_e4m3	False	False	32	4096	32	0.9300750738657798	none	bfloat16
+l1_engine_s0033	l1_engine	surrogate	failure:startup						startup	TRITON_ATTN	fp8_e5m2	True	False	32	4096	32	0.8043428823540442	fp8	float16
+l1_engine_s0034	l1_engine	surrogate	failure:startup						startup	XFORMERS	fp8_e4m3	True	True	16	2048	32	0.8400810547793478	gptq	auto
+l1_engine_s0035	l1_engine	surrogate	failure:startup						startup	XFORMERS	auto	False	False	32	1024	64	0.8456298037399111	fp8	float16
+l1_engine_s0037	l1_engine	surrogate	failure:startup						startup	FLASH_ATTN	fp8_e5m2	True	False	32	16384	64	0.9117849440048194	none	auto
+l1_engine_s0038	l1_engine	surrogate	failure:startup						startup	FLASH_ATTN	auto	True	False	32	16384	128	0.9333589929784593	none	auto
+l1_engine_s0039	l1_engine	surrogate	failure:startup						startup	FLASH_ATTN	auto	False	False	16	2048	64	0.886656413647526	gptq	auto
+l1_engine_s0040	l1_engine	surrogate	failure:startup						startup	FLASH_ATTN	fp8_e4m3	True	False	16	1024	512	0.9295205973790378	awq	bfloat16
+l1_engine_s0041	l1_engine	surrogate	failure:startup						startup	TRITON_ATTN	fp8	False	False	32	4096	128	0.9077939585511727	fp8	bfloat16
+l1_engine_s0043	l1_engine	surrogate	failure:startup						startup	XFORMERS	auto	False	True	16	2048	512	0.845626033608387	awq	float16
+l1_engine_s0044	l1_engine	surrogate	failure:startup						startup	XFORMERS	fp8_e5m2	False	False	32	4096	32	0.8873479599578082	fp8	bfloat16
+l1_engine_s0045	l1_engine	surrogate	failure:startup						startup	TRITON_ATTN	fp8	True	True	32	16384	512	0.8940059713938657	gptq	auto
+l1_engine_s0046	l1_engine	surrogate	failure:startup						startup	FLASHINFER	fp8	False	False	16	2048	256	0.9037262161747303	none	bfloat16
+l1_engine_s0047	l1_engine	surrogate	failure:startup						startup	FLASHINFER	fp8_e4m3	False	True	32	1024	512	0.8778484880579648	gptq	float16
+l1_engine_s0049	l1_engine	surrogate	failure:startup						startup	TRITON_ATTN	fp8_e4m3	True	False	16	4096	32	0.8494476736372119	awq	bfloat16
+l1_engine_w0000	l1_engine	warmstart	kept	467.8324638650321	15064.871880472638	135.9109187545253	72.3408203125	1.3711286651303867		FLASHINFER	auto	False	True	16	4096	256	0.9	none	bfloat16
+l1_engine_w0001	l1_engine	warmstart	failure:startup						startup	FLASHINFER	auto	True	False	32	8192	128	0.85	awq	float16
+l1_engine_w0002	l1_engine	warmstart	failure:startup						startup	FLASH_ATTN	auto	True	True	16	16384	64	0.92	gptq	bfloat16
+l1_engine_w0003	l1_engine	warmstart	kept	737.7384290274042	1686.942579462193	71.26959487862352	70.8818359375	2.1531916779195406		FLASHINFER	auto	True	True	32	1024	512	0.88	none	auto
+l1_engine_w0004	l1_engine	warmstart	failure:startup						startup	TRITON_ATTN	auto	False	False	16	4096	128	0.82	none	float16
+l1_engine_w0005	l1_engine	warmstart	failure:startup						startup	FLASHINFER	auto	False	False	16	2048	32	0.95	awq	bfloat16

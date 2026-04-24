@@ -1,0 +1,25 @@
+{
+  "config": {
+    "attention_backend": "FLASH_ATTN",
+    "block_size": 16,
+    "dtype": "bfloat16",
+    "enable_chunked_prefill": true,
+    "enable_prefix_caching": true,
+    "gpu_memory_utilization": 0.92,
+    "kv_cache_dtype": "auto",
+    "max_num_batched_tokens": 16384,
+    "max_num_seqs": 64,
+    "quantization": "gptq"
+  },
+  "failure": {
+    "kind": "startup",
+    "layer": "l1_engine",
+    "message": "startup failed: candidate exited during startup (code 1): elf_instance=s)\n(APIServer pid=8740) pydantic_core._pydantic_core.ValidationError: 1 validation error for VllmConfig\n(APIServer pid=8740)   Value error, Cannot find the config file for gptq [type=value_error, input_value=ArgsKwargs((), {'model_co... 'shutdown_timeout': 0}), input_type=ArgsKwargs]\n(APIServer pid=8740)     For further information visit https://errors.pydantic.dev/2.13/v/value_error\n",
+    "metadata": {},
+    "trial_id": "l1_engine_w0002"
+  },
+  "layer": "l1_engine",
+  "measurement": null,
+  "stale": false,
+  "trial_id": "l1_engine_w0002"
+}

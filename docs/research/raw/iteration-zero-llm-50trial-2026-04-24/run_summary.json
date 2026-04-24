@@ -1,0 +1,17 @@
+{
+  "run_id": "3870d28a6aa6",
+  "elapsed_s": 2633.18,
+  "n_trials": 50,
+  "n_kept": 9,
+  "n_failed": 41,
+  "failures_by_kind": {
+    "startup": 41
+  },
+  "phase_counts": {
+    "operator": 8,
+    "surrogate": 36,
+    "warmstart": 6
+  },
+  "pareto_size": 4,
+  "best_tokens_per_sec": 821.1841393950382
+}

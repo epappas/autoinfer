@@ -1,0 +1,25 @@
+{
+  "config": {
+    "attention_backend": "FLASH_ATTN",
+    "block_size": 32,
+    "dtype": "float16",
+    "enable_chunked_prefill": true,
+    "enable_prefix_caching": false,
+    "gpu_memory_utilization": 0.9220696729553716,
+    "kv_cache_dtype": "fp8",
+    "max_num_batched_tokens": 4096,
+    "max_num_seqs": 128,
+    "quantization": "awq"
+  },
+  "failure": {
+    "kind": "startup",
+    "layer": "l1_engine",
+    "message": "startup failed: candidate exited during startup (code 1): f_instance=s)\n(APIServer pid=11331) pydantic_core._pydantic_core.ValidationError: 1 validation error for VllmConfig\n(APIServer pid=11331)   Value error, Cannot find the config file for awq [type=value_error, input_value=ArgsKwargs((), {'model_co... 'shutdown_timeout': 0}), input_type=ArgsKwargs]\n(APIServer pid=11331)     For further information visit https://errors.pydantic.dev/2.13/v/value_error\n",
+    "metadata": {},
+    "trial_id": "l1_engine_s0010"
+  },
+  "layer": "l1_engine",
+  "measurement": null,
+  "stale": false,
+  "trial_id": "l1_engine_s0010"
+}

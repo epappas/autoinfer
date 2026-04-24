@@ -1,0 +1,25 @@
+{
+  "config": {
+    "attention_backend": "FLASH_ATTN",
+    "block_size": 16,
+    "dtype": "auto",
+    "enable_chunked_prefill": false,
+    "enable_prefix_caching": false,
+    "gpu_memory_utilization": 0.886656413647526,
+    "kv_cache_dtype": "auto",
+    "max_num_batched_tokens": 2048,
+    "max_num_seqs": 64,
+    "quantization": "gptq"
+  },
+  "failure": {
+    "kind": "startup",
+    "layer": "l1_engine",
+    "message": "config violates 1 constraint(s): chunked_prefill_batched_tokens_bound",
+    "metadata": {},
+    "trial_id": "l1_engine_s0039"
+  },
+  "layer": "l1_engine",
+  "measurement": null,
+  "stale": false,
+  "trial_id": "l1_engine_s0039"
+}

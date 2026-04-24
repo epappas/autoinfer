@@ -1,0 +1,25 @@
+{
+  "config": {
+    "attention_backend": "TRITON_ATTN",
+    "block_size": 32,
+    "dtype": "auto",
+    "enable_chunked_prefill": true,
+    "enable_prefix_caching": true,
+    "gpu_memory_utilization": 0.9470870199180923,
+    "kv_cache_dtype": "fp8",
+    "max_num_batched_tokens": 1024,
+    "max_num_seqs": 64,
+    "quantization": "gptq"
+  },
+  "failure": {
+    "kind": "startup",
+    "layer": "l1_engine",
+    "message": "config violates 1 constraint(s): kv_fp8_requires_compatible_backend",
+    "metadata": {},
+    "trial_id": "l1_engine_s0027"
+  },
+  "layer": "l1_engine",
+  "measurement": null,
+  "stale": false,
+  "trial_id": "l1_engine_s0027"
+}

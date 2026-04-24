@@ -99,16 +99,21 @@ feature-flag flips (e.g. switch attention backend), not source edits.
 | KV-cache transfer | NVLink / RDMA / IB / RoCE / TCP (NixlConnector) | dominates TTFT in disagg |
 | Asymmetric quantization | prefill FP16, decode FP8/AWQ | degrade at the memory bottleneck |
 | Replicas | per-role scaling | throughput at cost |
+| Router policy | cache_aware / power_of_two / consistent_hash / round_robin / random | multi-replica TTFT and prefix-hit depend on policy × prompt distribution; pairs with prefix caching |
 
 **Primary objective at L2:** tokens per GPU-second at quality. Dollar cost
 is derived post-hoc from an externally-supplied `\$/hr` table if the caller
 needs a currency figure; the ledger itself never touches currency.
 
 **Harness.** vLLM with Ray/torch.distributed on Basilica for homogeneous
-multi-node; llm-d on top when PD-disagg + routing matter. Extended metrics:
-inter-node KV GB/s, straggler tail, failover time under simulated node drop.
-IRO (llm-d Inference Resilience Operator) as the fault-recovery building
-block.
+multi-node; llm-d on top when PD-disagg + routing matter, or
+`vllm-project/router` (see `../raw/08-vllm-router-dataplane.md`) as the
+lighter Rust dataplane when the full llm-d operator surface is not needed
+— note that any multi-replica or PD-disagg trial *must* drive through
+one of these, or the measurement is a best-case artefact. Extended
+metrics: inter-node KV GB/s, straggler tail, failover time under
+simulated node drop. IRO (llm-d Inference Resilience Operator) as the
+fault-recovery building block.
 
 **Policy.** Outer policy picks (GPU class, count, TP×PP×EP). Inner policy is
 L1 inside the chosen topology, warm-started from prior L1 runs on matching

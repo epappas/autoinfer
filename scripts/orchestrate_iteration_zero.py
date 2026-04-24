@@ -157,11 +157,12 @@ def _fetch_artifacts(deployment: Deployment, out_dir: Path) -> None:
     print(f"[orchestrator] listing {index_url}")
     with urllib.request.urlopen(index_url, timeout=30) as resp:
         html = resp.read().decode("utf-8", errors="replace")
-    # very small, tolerant parser: pick hrefs ending in .json
+    # tolerant parser: pick hrefs ending in .json / .jsonl / .tsv / .log
     import re
 
-    candidates = set(re.findall(r'href="([^"]+\.json)"', html))
-    print(f"[orchestrator] {len(candidates)} json artifacts")
+    pattern = re.compile(r'href="([^"]+\.(?:jsonl|json|tsv|log))"')
+    candidates = set(pattern.findall(html))
+    print(f"[orchestrator] {len(candidates)} artifacts")
     for rel in sorted(candidates):
         dst = out_dir / rel
         dst.parent.mkdir(parents=True, exist_ok=True)
@@ -175,7 +176,13 @@ def _fetch_artifacts(deployment: Deployment, out_dir: Path) -> None:
 
 
 def _summarize_artifacts(artifacts_dir: Path) -> None:
-    files = sorted(artifacts_dir.rglob("*.json"))
+    # only count trial files (skip events.jsonl, results.tsv, run_summary.json,
+    # hw_context.json, *_bench.json which are auxiliary).
+    files = [
+        p for p in sorted(artifacts_dir.rglob("*.json"))
+        if not p.name.endswith("_bench.json")
+        and p.name not in ("run_summary.json", "hw_context.json")
+    ]
     kept = 0
     failed = 0
     for f in files:
@@ -187,7 +194,7 @@ def _summarize_artifacts(artifacts_dir: Path) -> None:
             kept += 1
         elif payload.get("failure"):
             failed += 1
-    print(f"[orchestrator] {len(files)} artifacts: {kept} with measurements, {failed} failures")
+    print(f"[orchestrator] {len(files)} trials: {kept} with measurements, {failed} failures")
 
 
 def _extract_instance_name(exc: Exception) -> str | None:

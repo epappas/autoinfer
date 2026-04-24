@@ -1,0 +1,31 @@
+{
+  "config": {
+    "attention_backend": "FLASH_ATTN",
+    "block_size": 16,
+    "dtype": "bfloat16",
+    "enable_chunked_prefill": true,
+    "enable_prefix_caching": true,
+    "gpu_memory_utilization": 0.85,
+    "kv_cache_dtype": "auto",
+    "max_num_batched_tokens": 8192,
+    "max_num_seqs": 64,
+    "quantization": "none"
+  },
+  "failure": null,
+  "layer": "l1_engine",
+  "measurement": {
+    "extra": {
+      "goodput": 3.6454201988417356,
+      "max_kl": 10.223952734506993,
+      "tpot_p50_ms": 24.374922102669654,
+      "ttft_p50_ms": 1230.7083734776825
+    },
+    "kl_divergence": 1.3222011308836001,
+    "peak_hbm_gb": 68.0283203125,
+    "tokens_per_sec": 773.34171936991,
+    "tpot_p99_ms": 101.05497609513483,
+    "ttft_p99_ms": 1457.9019884765148
+  },
+  "stale": false,
+  "trial_id": "l1_engine_o0036"
+}

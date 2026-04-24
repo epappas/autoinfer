@@ -30,6 +30,9 @@ The vLLM EngineArgs + runtime-env surface is broad and interacts non-trivially (
 - **Red Hat AI Inference Server 3.0: Complete list of vLLM server arguments** (Red Hat, 2025-2026) - https://docs.redhat.com/en/documentation/red_hat_ai_inference_server/3.0/html/vllm_server_arguments/all-server-arguments-server-arguments
   Enumerates the full exposed server-argument surface of a production vLLM distribution; the page has well over a hundred flags across scheduling, quantization, parallelism, KV, speculative decoding, and multimodal subsystems. Surface-area proof point.
 
+- **Inside vLLM: Anatomy of a High-Throughput LLM Inference System** (Aleksa Gordic, 2025-08-29, base commit `42172ad`) - https://www.aleksagordic.com/blog/vllm
+  Long-form walk-through of vLLM V1 from single-GPU offline inference to multi-node disaggregated serving; names every L1/L2 knob the autoinfer search targets (`block_size`, `long_prefill_token_threshold`, `gpu_memory_utilization`, prefix-cache toggles, spec-dec backend `ngram`/`eagle`/`medusa`, chunked prefill, TP/PP/DP, P/D-disagg connectors) in the live API, and frames `vllm bench {latency,throughput,serve}` + the in-tree auto-tune script as the natural public baseline for L1. Also gives the roofline/saturation-batch framing (piecewise-linear step time around `B_sat`) that the L1 surrogate should encode, and confirms V1 mixes prefill+decode in one batch, invalidating disjoint-regime models. See `docs/research/raw/07-vllm-v1-architecture.md`.
+
 ## C2 - Speculative decoding tradeoffs
 
 Speculative decoding (EAGLE / Medusa / MTP / PARD / draft-model variants) reliably speeds up decode, but the wins are acceptance-rate x batch-load dependent. Papers report *average* speedup and *average* acceptance length; serving-systems papers (SmartSpec/TurboSpec, Nebius MoE note) show that under high load or low acceptance, speculation can *increase* latency, meaning p99 and quality-variance effects are not captured by throughput-only benchmarks. EAGLE-3 / PARD claim lossless sampling but still task-dependent acceptance, so tail-behaviour is a first-class SLO concern.
@@ -60,6 +63,9 @@ Speculative decoding (EAGLE / Medusa / MTP / PARD / draft-model variants) reliab
 
 - **Why large MoE models break latency budgets and what speculative decoding changes in production systems** (Nebius Engineering blog, 2025) - https://nebius.com/blog/posts/moe-spec-decoding
   Production write-up stating speculative decoding "reshapes the latency distribution" with disproportionate effect on P90/P99 in long-context, non-streaming serving. Complements the SmartSpec paper with deployment-level evidence.
+
+- **Faster LLM Inference via Sequential Monte Carlo (SMC-SD)** (Abdelfattah lab, 2026, arXiv:2604.15672) - https://arxiv.org/abs/2604.15672 / repo https://github.com/abdelfattah-lab/smcsd / blog https://makora.com/blog/smc-sd
+  Replaces rejection-sampled verification with importance-sampled resampling over N draft particles; no KV rollback path, bounded approximation error instead of bit-exact sampling. Reports 5.2x vs AR / 2.36x vs SOTA spec-dec within 3% accuracy loss on Llama 70B / 4xH100 (GSM8K, MATH, AlpacaEval, DS-1000). Exposes five inference-time knobs (`n_particles`, `gamma`, resample threshold/method, draft/target temperatures) on top of SGLang + Triton + FlashAttention-3 - first lossy-but-bounded spec-dec variant, forcing the quality gate to be a live reference replica rather than strict-accept-by-construction. See `docs/research/raw/05-smc-speculative-decoding.md`.
 
 *Conflict note:* The EAGLE papers claim "lossless" sampling, and vLLM's strict-accept speculative decoding is by construction distribution-preserving. If one believes strict-accept is correctly implemented in every kernel, quality variance reduces to *latency* variance only. The falsifiable piece of the thesis is: in the presence of FP8/fp16 mixed kernels, batch-variant matmul, and tree verification, strict-accept may not hold bit-exact - so the claim "speculative decoding has zero quality risk" is empirical, not axiomatic. This is where C3 connects.
 
@@ -128,6 +134,22 @@ Minimal reimplementations (nano-vLLM and kin) are excellent for pedagogy and for
   LMSYS's own minimal engine - explicitly framed as didactic stripping of SGLang. Same message from a second ecosystem: minimal engines teach, production engines serve, and the feature delta (chunked prefill, structured decoding, radix cache, deterministic kernels) is the search surface.
 
 *Conflict note:* nano-vLLM's reported 5% throughput edge on a narrow Qwen3-0.6B benchmark is real (prior autoinfer note `04-karpathy-style-minimal-inference.md` cites 1434 vs 1362 tok/s). That number is compatible with C8 because it is measured on a workload that exercises none of vLLM V1's distinguishing features - small model, no chunked prefill, no speculation, no quantization, no multimodal, no disagg. Extrapolating from it to "nano-vLLM is a valid search substrate" is where the claim cuts.
+
+## Scope note — routing policy is not L1
+
+Request-level load-balancing and PD-disagg dispatch (policies
+`cache_aware` / `power_of_two` / `consistent_hash` / `round_robin` /
+`random`, plus `--vllm-pd-disaggregation` with prefill/decode pools) live
+*above* the engine — in `vllm-project/router` (see
+`08-vllm-router-dataplane.md`) or llm-d, not in `EngineArgs`. They
+belong to L2 topology, not L1. This matters for the L1 track because
+any multi-replica "L1 beats defaults" claim is under-specified without
+stating the router policy: switching policy with the same engine args
+moves the effective workload seen by each worker and can swamp
+single-flag L1 wins. L1 experiments at iteration zero stay single-
+replica (§8 of `00-hypothesis-seed.md`), which side-steps this — but the
+moment L2 brings a second replica online, router policy must be part of
+the trial record or the L1 numbers become non-comparable.
 
 ## Gaps
 

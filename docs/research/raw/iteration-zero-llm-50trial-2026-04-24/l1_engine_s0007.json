@@ -1,0 +1,25 @@
+{
+  "config": {
+    "attention_backend": "FLASHINFER",
+    "block_size": 32,
+    "dtype": "bfloat16",
+    "enable_chunked_prefill": true,
+    "enable_prefix_caching": false,
+    "gpu_memory_utilization": 0.9167235126424775,
+    "kv_cache_dtype": "fp8_e5m2",
+    "max_num_batched_tokens": 2048,
+    "max_num_seqs": 256,
+    "quantization": "fp8"
+  },
+  "failure": {
+    "kind": "startup",
+    "layer": "l1_engine",
+    "message": "startup failed: candidate exited during startup (code 1): \", line 998, in launch_core_engines\n(APIServer pid=10757)     wait_for_engine_startup(\n(APIServer pid=10757)   File \"/workspace/autoinfer/.venv/lib/python3.11/site-packages/vllm/v1/engine/utils.py\", line 1057, in wait_for_engine_startup\n(APIServer pid=10757)     raise RuntimeError(\n(APIServer pid=10757) RuntimeError: Engine core initialization failed. See root cause above. Failed core proc(s): {}\n",
+    "metadata": {},
+    "trial_id": "l1_engine_s0007"
+  },
+  "layer": "l1_engine",
+  "measurement": null,
+  "stale": false,
+  "trial_id": "l1_engine_s0007"
+}
