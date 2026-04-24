@@ -52,7 +52,9 @@ class L2TopologyAdapter:
     num_prompts: int = 64
     gate_concurrency: int = 4
     driver_timeout_s: int = 1800
-    deploy_timeout_s: int = 1200
+    # 30 min gives enough slack for Basilica scheduler + pod bring-up +
+    # ~16 GB model pull on a cold spot node.
+    deploy_timeout_s: int = 1800
     ttl_seconds: int = 3600
     memory: str = "64Gi"
     storage: bool = True
@@ -64,9 +66,23 @@ class L2TopologyAdapter:
     def run(self, trial: TrialInput) -> TrialOutput:
         deploy_kwargs = self._build_deploy_kwargs(trial)
         deployment = None
+        instance_name: str | None = None
         try:
             deployment = self.basilica_client.deploy_vllm(**deploy_kwargs)
         except Exception as e:  # noqa: BLE001
+            # deploy_vllm internally calls wait_until_ready; on TIMEOUT the
+            # deployment was created on Basilica but never returned to us.
+            # The exception message contains the instance UUID — extract
+            # and delete so we don't leak spot-GPU quota.
+            msg = str(e)
+            import re as _re
+            m = _re.search(r"'([0-9a-f-]{36})'", msg)
+            if m:
+                instance_name = m.group(1)
+                try:
+                    self.basilica_client.delete_deployment(instance_name)
+                except Exception:  # noqa: BLE001
+                    pass
             return TrialOutput(
                 measurement=None,
                 failure=self._fail(trial, FailureKind.STARTUP, f"deploy_vllm: {e}"),

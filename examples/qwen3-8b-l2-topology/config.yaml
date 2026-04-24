@@ -76,8 +76,8 @@ layers:
     knobs_path: src/autoinfer/layers/l2_topology/knobs.yaml
     max_trials: 5
     memory: 64Gi
-    ttl_seconds: 2400
-    deploy_timeout_s: 1200
+    ttl_seconds: 3600
+    deploy_timeout_s: 1800
 
 target:
   kind: local
