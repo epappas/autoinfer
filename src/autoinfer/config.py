@@ -125,8 +125,12 @@ class L1EngineConfig(_Base):
 
 
 class L2TopologyConfig(_Base):
-    gpu_classes: tuple[str, ...] = ("H100",)
-    max_trials: int = Field(ge=0, default=0)
+    model: str = "Qwen/Qwen3-8B"
+    knobs_path: Path
+    max_trials: int = Field(ge=1, default=20)
+    memory: str = "64Gi"
+    ttl_seconds: int = Field(ge=300, default=3600)
+    deploy_timeout_s: int = Field(ge=60, default=1200)
 
 
 class L3KernelConfig(_Base):

@@ -1,0 +1,83 @@
+# L2 topology campaign — varies GPU class / count via per-trial Basilica
+# deployments. Reference replica stays local in the campaign container;
+# candidates run on remote spot nodes. Requires OPENROUTER_API_KEY and
+# BASILICA_API_TOKEN in env (orchestrator forwards both).
+
+name: qwen3-8b-l2-topology
+
+harness:
+  driver:
+    trace_path: ./trace/sharegpt_full.json
+    duration_s: 900
+    slo_ttft_p99_ms: 1500.0
+    slo_tpot_p99_ms: 150.0
+    dataset_name: sharegpt
+    num_prompts: 64
+  gate:
+    # Reference is the local vllm-serve started by campaign_runner on GPU 1.
+    replica_uri: http://127.0.0.1:8001
+    prompts_path: ./quality/500_prompts.jsonl
+    smoke_prompts: 20
+    full_prompts: 500
+    batch_sizes: [1]
+    max_kl: 2.0
+    calibrate_self_kl: true
+    calibration_multiplier: 5.0
+  ledger:
+    output_dir: ./runs/qwen3-8b-l2-topology
+    pareto_axes: [tokens_per_sec, tpot_p99_ms, peak_hbm_gb]
+
+policy:
+  warmstart:
+    provider: openai_compatible
+    base_url: https://openrouter.ai/api/v1
+    llm_model: anthropic/claude-sonnet-4
+    n_configs: 4
+    api_key_env: OPENROUTER_API_KEY
+    hardware_notes: |
+      Multi-GPU-class search on the Basilica spot marketplace.
+      Each trial provisions a fresh deployment; reference replica stays on
+      the campaign container's local GPU (RTX A6000, bfloat16).
+
+      Available GPU types right now (sampled from list_secure_cloud_gpus):
+        - RTX A6000 (Ampere, 48 GB)
+        - L40 (Ada, 48 GB)
+        - L40S (Ada, 48 GB)
+        - RTX 6000 ADA (Ada, 48 GB)
+      H100 and A100 are NOT available at this snapshot.
+
+      None of the available types support FP8 (needs Hopper+).
+      Keep dtype in {bfloat16, float16, auto}; never propose quantization=fp8.
+
+      Available axes:
+        - gpu_type: pick from the four listed above
+        - gpu_count: 1, 2, or 4
+        - dtype: auto / float16 / bfloat16
+        - gpu_memory_utilization: 0.80 - 0.92
+        - enforce_eager: true/false
+
+      What to explore:
+        - L40S vs RTX A6000 at gpu_count=2 (different memory bandwidth)
+        - gpu_count=4 on whichever class has higher availability
+        - bfloat16 vs float16 at the same hardware
+  surrogate:
+    kind: tpe
+    seed: 0
+  fidelity:
+    rungs: [100, 500]
+    eta: 3
+  operator:
+    llm_model: anthropic/claude-sonnet-4
+    cadence: 3
+
+layers:
+  l2_topology:
+    model: Qwen/Qwen3-8B
+    knobs_path: src/autoinfer/layers/l2_topology/knobs.yaml
+    max_trials: 5
+    memory: 64Gi
+    ttl_seconds: 2400
+    deploy_timeout_s: 1200
+
+target:
+  kind: local

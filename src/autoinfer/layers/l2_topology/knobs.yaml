@@ -1,0 +1,59 @@
+# L2 topology search surface — what varies from one Basilica deployment
+# to the next within a single L2 campaign.
+#
+# Each knob maps to a BasilicaClient.deploy_vllm(...) kwarg.
+
+knobs:
+  gpu_type:
+    type: categorical
+    values:
+      - "RTX A6000"
+      - "L40"
+      - "L40S"
+      - "RTX 6000 ADA"
+    default: "RTX A6000"
+    basilica_deploy_vllm_kwarg: gpu_models
+    coupled_with: [dtype, quantization]
+    axis: throughput
+    description: GPU SKU to deploy on (Basilica spot marketplace).
+
+  gpu_count:
+    type: categorical
+    values: [1, 2, 4]
+    default: 2
+    basilica_deploy_vllm_kwarg: gpu_count
+    coupled_with: [tensor_parallel_size]
+    axis: throughput
+    description: Number of GPUs on the candidate deployment.
+
+  dtype:
+    type: categorical
+    values: [auto, float16, bfloat16]
+    default: bfloat16
+    basilica_deploy_vllm_kwarg: dtype
+    axis: quality
+    description: Compute dtype for the model.
+
+  gpu_memory_utilization:
+    type: float
+    low: 0.80
+    high: 0.92
+    default: 0.88
+    basilica_deploy_vllm_kwarg: gpu_memory_utilization
+    axis: memory
+    description: Fraction of GPU memory reserved for weights + KV.
+
+  enforce_eager:
+    type: bool
+    default: false
+    basilica_deploy_vllm_kwarg: enforce_eager
+    axis: throughput
+    description: Disable CUDA graphs; debug-mode execution.
+
+constraints:
+  - rule: tensor_parallel_matches_gpu_count
+    description: tensor_parallel_size is implied = gpu_count for single-node L2.
+    when_knob: gpu_count
+    when_values: [1, 2, 4]
+    requires_knob: gpu_count
+    requires_values: [1, 2, 4]

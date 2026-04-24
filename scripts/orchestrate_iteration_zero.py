@@ -94,7 +94,14 @@ def _build_spec(args: argparse.Namespace) -> CampaignSpec:
     )
     # Pass through any LLM-provider API keys so the campaign's warmstart
     # and operator policies can authenticate from within the container.
-    for var in ("ANTHROPIC_API_KEY", "OPENAI_API_KEY", "OPENROUTER_API_KEY"):
+    # BASILICA_API_TOKEN also passes through: the L2 adapter spawns per-trial
+    # deployments via the SDK from inside the campaign container.
+    for var in (
+        "ANTHROPIC_API_KEY",
+        "OPENAI_API_KEY",
+        "OPENROUTER_API_KEY",
+        "BASILICA_API_TOKEN",
+    ):
         val = os.environ.get(var)
         if val:
             spec.env[var] = val
