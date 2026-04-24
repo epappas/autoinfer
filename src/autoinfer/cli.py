@@ -43,11 +43,25 @@ def validate(config_path: Path) -> None:
 @app.command()
 def run(
     config_path: Path,
-    max_trials: int | None = typer.Option(None, help="Override layer max_trials."),
+    max_trials: int | None = typer.Option(
+        None, help="Uniform max_trials override for every layer."
+    ),
+    layer_trials: list[str] = typer.Option(  # noqa: B008
+        [],
+        "--layer-trials",
+        help=(
+            "Per-layer override as LAYER=N (repeatable); e.g. "
+            "--layer-trials l1_engine=3 --layer-trials l2_topology=1. "
+            "Takes precedence over --max-trials for the named layer."
+        ),
+    ),
 ) -> None:
     """Execute a run end-to-end."""
     cfg = _load_checked(config_path)
-    runner, ledger = build_runner(cfg, max_trials_override=max_trials)
+    per_layer = _parse_layer_trials(layer_trials)
+    runner, ledger = build_runner(
+        cfg, max_trials_override=max_trials, per_layer_overrides=per_layer,
+    )
     start = time.monotonic()
     front = runner.run()
     elapsed = time.monotonic() - start
@@ -112,6 +126,30 @@ def _enabled_layers(cfg: RunConfig) -> list[str]:
 
 def _api_key(var: str | None) -> str | None:
     return os.environ.get(var) if var else None
+
+
+_VALID_LAYERS = {"l1_engine", "l2_topology", "l3_kernel"}
+
+
+def _parse_layer_trials(entries: list[str]) -> dict[str, int]:
+    out: dict[str, int] = {}
+    for raw in entries:
+        if "=" not in raw:
+            raise typer.BadParameter(f"--layer-trials expects LAYER=N, got {raw!r}")
+        name, _, value = raw.partition("=")
+        name = name.strip()
+        if name not in _VALID_LAYERS:
+            raise typer.BadParameter(
+                f"--layer-trials unknown layer {name!r}; expected one of {sorted(_VALID_LAYERS)}"
+            )
+        try:
+            n = int(value)
+        except ValueError as e:
+            raise typer.BadParameter(f"--layer-trials value for {name!r} must be int, got {value!r}") from e
+        if n < 1:
+            raise typer.BadParameter(f"--layer-trials value for {name!r} must be >= 1")
+        out[name] = n
+    return out
 
 
 if __name__ == "__main__":

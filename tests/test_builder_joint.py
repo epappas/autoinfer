@@ -90,6 +90,27 @@ def test_joint_override_caps_every_layer(tmp_path: Path) -> None:
     assert runner.scheduler.specs["l3_kernel"].max_trials == 2
 
 
+def test_joint_per_layer_override_wins_over_uniform(tmp_path: Path) -> None:
+    cfg = RunConfig.model_validate(_raw_joint(tmp_path))
+    runner, _ = build_runner(
+        cfg,
+        max_trials_override=10,
+        per_layer_overrides={"l1_engine": 2},
+    )
+    assert runner.scheduler.specs["l1_engine"].max_trials == 2
+    # uniform fallback for layers without explicit per-layer override
+    assert runner.scheduler.specs["l3_kernel"].max_trials == 10
+
+
+def test_joint_per_layer_override_alone(tmp_path: Path) -> None:
+    cfg = RunConfig.model_validate(_raw_joint(tmp_path))
+    runner, _ = build_runner(
+        cfg, per_layer_overrides={"l1_engine": 1, "l3_kernel": 2},
+    )
+    assert runner.scheduler.specs["l1_engine"].max_trials == 1
+    assert runner.scheduler.specs["l3_kernel"].max_trials == 2
+
+
 def test_joint_emits_config_loaded_with_all_layers(tmp_path: Path) -> None:
     cfg = RunConfig.model_validate(_raw_joint(tmp_path))
     build_runner(cfg)

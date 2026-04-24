@@ -33,28 +33,40 @@ from autoinfer.telemetry import EventLog, capture_hw_context, write_hw_context
 
 
 def build_runner(
-    cfg: RunConfig, max_trials_override: int | None = None
+    cfg: RunConfig,
+    max_trials_override: int | None = None,
+    per_layer_overrides: dict[str, int] | None = None,
 ) -> tuple[ContinuousRunner, Ledger]:
     """Build a runner that owns every layer enabled in ``cfg.layers``.
 
-    ``max_trials_override`` applies per-layer when set (each enabled
-    layer uses the same override). That matches iteration-zero's
-    ``--max-trials`` CLI flag semantics for single-layer runs, and gives
-    joint runs a simple "cap every layer at N" knob.
+    Precedence for a layer's ``max_trials``:
+      1. ``per_layer_overrides[layer_name]`` when present
+      2. ``max_trials_override`` (uniform for every layer)
+      3. ``cfg.layers.<layer>.max_trials`` from the config
+
+    Per-layer overrides let smoke tests cap L1 and L2 independently
+    (L1 trials take ~2 min on a local GPU; L2 trials take ~20 min on
+    Basilica — a uniform "--max-trials 2" still spends ~45 min).
     """
+    per_layer_overrides = per_layer_overrides or {}
     specs: dict[str, LayerSpec] = {}
     layer_events: list[dict[str, Any]] = []
 
+    def _layer_override(name: str) -> int | None:
+        if name in per_layer_overrides:
+            return per_layer_overrides[name]
+        return max_trials_override
+
     if cfg.layers.l1_engine is not None:
-        name, spec, ev = _build_l1_spec(cfg, max_trials_override)
+        name, spec, ev = _build_l1_spec(cfg, _layer_override("l1_engine"))
         specs[name] = spec
         layer_events.append(ev)
     if cfg.layers.l2_topology is not None:
-        name, spec, ev = _build_l2_spec(cfg, max_trials_override)
+        name, spec, ev = _build_l2_spec(cfg, _layer_override("l2_topology"))
         specs[name] = spec
         layer_events.append(ev)
     if cfg.layers.l3_kernel is not None:
-        name, spec, ev = _build_l3_spec(cfg, max_trials_override)
+        name, spec, ev = _build_l3_spec(cfg, _layer_override("l3_kernel"))
         specs[name] = spec
         layer_events.append(ev)
 

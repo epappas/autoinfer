@@ -40,6 +40,7 @@ BRANCH = __BRANCH__
 CONFIG = __CONFIG__
 MODEL = __MODEL__
 MAX_TRIALS = __MAX_TRIALS__
+LAYER_TRIALS = __LAYER_TRIALS__
 REF_PORT = __REF_PORT__
 WORKDIR = Path("/workspace/autoinfer")
 
@@ -145,6 +146,8 @@ def run_campaign():
         ]
         if MAX_TRIALS is not None:
             cmd.extend(["--max-trials", str(MAX_TRIALS)])
+        for lt in LAYER_TRIALS:
+            cmd.extend(["--layer-trials", lt])
 
         STATE["stage"] = "campaign_running"
         log("running: " + " ".join(cmd))
@@ -188,6 +191,7 @@ class CampaignSpec:
     candidate_port: int = 8000
     artifacts_port: int = 9000
     max_trials: int | None = None
+    layer_trials: list[str] = field(default_factory=list)
     hf_token_env: str | None = None
     env: dict[str, str] = field(default_factory=dict)
 
@@ -204,6 +208,7 @@ class CampaignSpec:
                 "__MAX_TRIALS__",
                 "None" if self.max_trials is None else str(self.max_trials),
             )
+            .replace("__LAYER_TRIALS__", repr(list(self.layer_trials)))
             .replace("__REF_PORT__", str(self.reference_port))
         )
 

@@ -67,6 +67,12 @@ def _parse_args() -> argparse.Namespace:
     p.add_argument("--name", default=f"autoinfer-iter0-{int(time.time())}")
     p.add_argument("--dry-run", action="store_true", help="Print plan, make no API calls.")
     p.add_argument("--max-trials", type=int, default=None)
+    p.add_argument(
+        "--layer-trials",
+        action="append",
+        default=[],
+        help="Per-layer cap LAYER=N, repeatable; forwarded through to `autoinfer run`.",
+    )
     p.add_argument("--config", default="examples/qwen3-8b-l1-slice/config.yaml")
     p.add_argument("--branch", default="main")
     p.add_argument("--repo", default="https://github.com/epappas/autoinfer.git")
@@ -90,6 +96,7 @@ def _build_spec(args: argparse.Namespace) -> CampaignSpec:
         autoinfer_config=args.config,
         model=args.model,
         max_trials=args.max_trials,
+        layer_trials=list(args.layer_trials),
         hf_token_env="HF_TOKEN" if os.environ.get("HF_TOKEN") else None,
     )
     # Pass through any LLM-provider API keys so the campaign's warmstart

@@ -91,12 +91,19 @@ def start_reference(workdir: Path, model: str, port: int) -> subprocess.Popen[by
     return proc
 
 
-def run_autoinfer(workdir: Path, config: str, max_trials: int | None) -> int:
+def run_autoinfer(
+    workdir: Path,
+    config: str,
+    max_trials: int | None,
+    layer_trials: list[str],
+) -> int:
     env = os.environ.copy()
     env["CUDA_VISIBLE_DEVICES"] = "0"
     cmd = ["uv", "run", "autoinfer", "run", config]
     if max_trials is not None:
         cmd.extend(["--max-trials", str(max_trials)])
+    for lt in layer_trials:
+        cmd.extend(["--layer-trials", lt])
     log(f"running: {' '.join(cmd)}")
     result = subprocess.run(cmd, env=env, cwd=str(workdir))
     log(f"autoinfer exit code: {result.returncode}")
@@ -129,6 +136,12 @@ def main() -> int:
     p.add_argument("--model", default="Qwen/Qwen3-8B")
     p.add_argument("--ref-port", type=int, default=8001)
     p.add_argument("--max-trials", type=int, default=None)
+    p.add_argument(
+        "--layer-trials",
+        action="append",
+        default=[],
+        help="Per-layer cap LAYER=N, repeatable; forwarded to `autoinfer run`.",
+    )
     p.add_argument("--workdir", type=Path, default=Path.cwd())
     p.add_argument("--skip-install", action="store_true")
     p.add_argument("--skip-fetch", action="store_true")
@@ -149,7 +162,7 @@ def main() -> int:
 
     ref_proc = start_reference(workdir, args.model, args.ref_port)
     try:
-        code = run_autoinfer(workdir, args.config, args.max_trials)
+        code = run_autoinfer(workdir, args.config, args.max_trials, args.layer_trials)
         summarize(workdir)
     finally:
         log("terminating reference replica")

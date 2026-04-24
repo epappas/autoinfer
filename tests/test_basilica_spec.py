@@ -73,6 +73,19 @@ def test_source_omits_max_trials_flag_when_none() -> None:
     assert "MAX_TRIALS = None" in src
 
 
+def test_source_injects_layer_trials() -> None:
+    src = CampaignSpec(
+        layer_trials=["l1_engine=3", "l2_topology=1"]
+    ).build_source()
+    assert "LAYER_TRIALS = ['l1_engine=3', 'l2_topology=1']" in src
+    assert '"--layer-trials"' in src
+
+
+def test_source_empty_layer_trials_when_unset() -> None:
+    src = CampaignSpec().build_source()
+    assert "LAYER_TRIALS = []" in src
+
+
 def test_deploy_kwargs_minimal() -> None:
     spec = CampaignSpec()
     kw = spec.build_deploy_kwargs(name="test-deploy")
