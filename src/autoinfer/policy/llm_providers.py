@@ -140,7 +140,7 @@ class AnthropicProposalLLM:
 
     def __post_init__(self) -> None:
         try:
-            import anthropic  # type: ignore[import-not-found]
+            import anthropic  # type: ignore[import-not-found, unused-ignore]
         except ImportError as e:
             raise ImportError(
                 "AnthropicProposalLLM requires the 'llm' extra: "
