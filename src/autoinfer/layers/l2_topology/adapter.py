@@ -79,10 +79,9 @@ class L2TopologyAdapter:
             m = _re.search(r"'([0-9a-f-]{36})'", msg)
             if m:
                 instance_name = m.group(1)
-                try:
+                import contextlib as _cl
+                with _cl.suppress(Exception):
                     self.basilica_client.delete_deployment(instance_name)
-                except Exception:  # noqa: BLE001
-                    pass
             return TrialOutput(
                 measurement=None,
                 failure=self._fail(trial, FailureKind.STARTUP, f"deploy_vllm: {e}"),
