@@ -1,0 +1,115 @@
+# Joint L1 x L2 campaign — the thesis-grade experiment.
+#
+# Runs L1 (engine-config knobs on the campaign container's local GPU)
+# AND L2 (per-trial Basilica deployments across GPU classes) inside
+# the same ContinuousRunner, interleaving them. The cross-layer
+# stale-signal propagation (P4) fires automatically: when an L2 Pareto
+# entry lands, every L1 entry at a layer *above* L2 is stale-flagged
+# — the scheduler re-prioritises those on the next pick_layer().
+#
+# Requires: OPENROUTER_API_KEY + BASILICA_API_TOKEN.
+# Expected cost: ~$30-50 on Basilica spot for a 20-trial run
+# (~14 L1 trials at local ~2-3 min/ea + 6 L2 trials at ~20 min/ea).
+
+name: qwen3-8b-l1-l2-joint
+
+harness:
+  driver:
+    trace_path: ./trace/sharegpt_full.json
+    duration_s: 900
+    slo_ttft_p99_ms: 1500.0
+    slo_tpot_p99_ms: 150.0
+    dataset_name: sharegpt
+    num_prompts: 64
+  gate:
+    replica_uri: http://127.0.0.1:8001
+    prompts_path: ./quality/500_prompts.jsonl
+    smoke_prompts: 20
+    full_prompts: 500
+    batch_sizes: [1]
+    max_kl: 2.0
+    calibrate_self_kl: true
+    calibration_multiplier: 5.0
+  ledger:
+    output_dir: ./runs/qwen3-8b-l1-l2-joint
+    pareto_axes: [tokens_per_sec, tpot_p99_ms, peak_hbm_gb]
+
+policy:
+  warmstart:
+    provider: openai_compatible
+    base_url: https://openrouter.ai/api/v1
+    llm_model: anthropic/claude-sonnet-4
+    n_configs: 4
+    api_key_env: OPENROUTER_API_KEY
+    hardware_notes: |
+      Joint L1 x L2 search on Qwen3-8B + ShareGPT.
+
+      L1 (engine-config) trials run on the campaign container's local
+      GPU (2x RTX A6000; candidate uses GPU 0, reference on GPU 1).
+      L2 (topology) trials provision fresh Basilica deployments,
+      switching gpu_type and other topology knobs each trial.
+
+      L2 GPU classes available via Basilica spot right now:
+        - H100 (Hopper, sm_90, 80 GB, FP8-capable) — top tier
+        - A100 (Ampere, sm_80, 40 or 80 GB) — strong mid
+        - RTX A6000 (Ampere, sm_86, 48 GB) — baseline
+
+      Hardware-compat rules to respect:
+        - FP8 KV / FP8 weights only work on H100; quantization=fp8
+          fails startup on A100 and A6000.
+        - bfloat16 is preferred on all three for Qwen3-8B stability.
+        - Spot availability for RTX A6000 at gpu_count=1 is flaky;
+          prefer H100 or A100 for the first few L2 trials.
+
+      Thesis motivation (why joint): prior L1-only runs peaked at
+      870 tok/s on A6000; prior L2-only runs peaked at 895 tok/s on
+      H100. Neither campaign varied knobs *and* hardware together.
+      Best L1 config on A6000 may not be best L1 config on H100 —
+      FLASHINFER on H100 could unlock another 20-30% over defaults.
+      This joint run is designed to find exactly such configs.
+
+      L1 knobs to explore (local replica):
+        - attention_backend (FLASHINFER vs FLASH_ATTN)
+        - kv_cache_dtype (auto / fp8 — only on H100 for L2)
+        - enable_prefix_caching (true often wins on repeat prompts)
+        - max_num_batched_tokens / max_num_seqs
+        - gpu_memory_utilization (0.85 - 0.92)
+        - block_size (16 vs 32)
+
+      L2 knobs to explore (remote deployments):
+        - gpu_type (H100, A100, RTX A6000)
+        - gpu_count (1 preferred; 2 only if throughput justifies)
+        - dtype (bfloat16 default; float16 on H100 for latency floor)
+        - gpu_memory_utilization
+        - enforce_eager
+  surrogate:
+    kind: tpe
+    seed: 0
+  fidelity:
+    rungs: [100, 500]
+    eta: 3
+  operator:
+    llm_model: anthropic/claude-sonnet-4
+    cadence: 4
+
+layers:
+  l1_engine:
+    model: Qwen/Qwen3-8B
+    knobs_path: src/autoinfer/layers/l1_engine/knobs.yaml
+    # L1 trials run fast on the campaign container's local GPU
+    # (~2-3 min each). Budget the larger share for L1.
+    max_trials: 14
+    candidate_port: 8000
+    startup_timeout_s: 600
+  l2_topology:
+    model: Qwen/Qwen3-8B
+    knobs_path: src/autoinfer/layers/l2_topology/knobs.yaml
+    # L2 trials are expensive (~20 min each on Basilica); keep to a
+    # small but thesis-meaningful sample.
+    max_trials: 6
+    memory: 64Gi
+    ttl_seconds: 3600
+    deploy_timeout_s: 2100
+
+target:
+  kind: local

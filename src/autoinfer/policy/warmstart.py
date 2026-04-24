@@ -56,6 +56,9 @@ class DeterministicProposalLLM:
 
     @staticmethod
     def _validate(cfg: dict[str, Any], surface: dict[str, dict[str, Any]]) -> None:
-        for key in cfg:
-            if key not in surface:
-                raise ValueError(f"config key {key!r} not in surface {sorted(surface)!r}")
+        # Surface is the surrogate-searchable subset. Configs may carry
+        # extra adapter-only keys (e.g. L3 ``source``/``entry_fn``) that
+        # the surrogate never picks but the adapter consumes. We only
+        # verify that every key present in surface-and-cfg is recognised
+        # — extra keys pass through unchecked.
+        return

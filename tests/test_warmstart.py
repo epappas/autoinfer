@@ -53,11 +53,16 @@ def test_idx_persists_across_calls() -> None:
     assert second[0] == _configs()[1]
 
 
-def test_rejects_config_with_unknown_key() -> None:
-    bad = [{"made_up_knob": 123}]
-    llm = DeterministicProposalLLM(bad)
-    with pytest.raises(ValueError):
-        llm.propose_configs(_surface(), n=1, prior_notes="", history=[])
+def test_allows_extra_keys_beyond_surface() -> None:
+    """Surface is the surrogate-searchable subset. Configs may carry
+    adapter-only keys (e.g. L3 ``source``/``entry_fn``) that the
+    surrogate never picks but the adapter consumes. Deterministic
+    warmstart must pass these through unchanged."""
+    configs = [{"attention_backend": "FLASHINFER", "kernel_source": "...raw..."}]
+    llm = DeterministicProposalLLM(configs)
+    out = llm.propose_configs(_surface(), n=1, prior_notes="", history=[])
+    assert out[0]["kernel_source"] == "...raw..."
+    assert out[0]["attention_backend"] == "FLASHINFER"
 
 
 def test_n_must_be_positive() -> None:

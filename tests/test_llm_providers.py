@@ -40,10 +40,13 @@ def test_parse_configs_accepts_fenced_response() -> None:
     assert out == [{"max_num_batched_tokens": 4096}]
 
 
-def test_parse_configs_rejects_unknown_knob() -> None:
+def test_parse_configs_allows_adapter_only_keys() -> None:
+    """Surface is surrogate-searchable; adapter-only keys (e.g. L3
+    ``source``) pass through unchanged. Adapters do their own
+    validation — the LLM-response parser just accepts what was sent."""
     text = '[{"mystery_knob": 42}]'
-    with pytest.raises(ValueError):
-        parse_configs(text, _surface(), n=1)
+    out = parse_configs(text, _surface(), n=1)
+    assert out == [{"mystery_knob": 42}]
 
 
 def test_parse_configs_no_json_array_raises() -> None:

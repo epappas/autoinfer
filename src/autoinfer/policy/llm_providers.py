@@ -76,9 +76,9 @@ def parse_configs(
     for cfg in configs:
         if not isinstance(cfg, dict):
             continue
-        for key in cfg:
-            if key not in surface:
-                raise ValueError(f"LLM proposed unknown knob {key!r}")
+        # Surface is the surrogate-searchable subset; adapters may accept
+        # pass-through keys beyond it (e.g. L3 ``source``). Trust the
+        # adapter's own validation rather than reject extras here.
         out.append(cfg)
     if not out:
         raise ValueError("no valid configs in LLM response")
