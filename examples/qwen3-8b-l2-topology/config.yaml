@@ -74,10 +74,14 @@ layers:
   l2_topology:
     model: Qwen/Qwen3-8B
     knobs_path: src/autoinfer/layers/l2_topology/knobs.yaml
-    max_trials: 5
+    # Each L2 trial provisions a fresh Basilica deployment: ~5-15 min
+    # image/weights pull + ~3-5 min vllm warmup + bench + teardown.
+    # Budget 25-35 min per trial; 3 trials keeps the iteration-zero
+    # validation under 2 hours wall clock.
+    max_trials: 3
     memory: 64Gi
     ttl_seconds: 3600
-    deploy_timeout_s: 1800
+    deploy_timeout_s: 2100
 
 target:
   kind: local

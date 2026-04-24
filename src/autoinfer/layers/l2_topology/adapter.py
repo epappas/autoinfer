@@ -103,6 +103,37 @@ class L2TopologyAdapter:
         kwargs.setdefault("storage", self.storage)
         kwargs.setdefault("ttl_seconds", self.ttl_seconds)
         kwargs.setdefault("timeout", self.deploy_timeout_s)
+        # Generous startup probe: 2 min initial delay + 60 failures x 15s
+        # = 17 min tolerance for model download + vllm warmup after the
+        # container is alive. Liveness has even longer head-room so an
+        # already-running candidate isn't nuked during bench runs.
+        import basilica
+        kwargs.setdefault(
+            "health_check",
+            basilica.HealthCheckConfig(
+                startup=basilica.ProbeConfig(
+                    path="/health",
+                    initial_delay_seconds=120,
+                    period_seconds=15,
+                    timeout_seconds=10,
+                    failure_threshold=60,
+                ),
+                liveness=basilica.ProbeConfig(
+                    path="/health",
+                    initial_delay_seconds=1200,
+                    period_seconds=60,
+                    timeout_seconds=15,
+                    failure_threshold=5,
+                ),
+                readiness=basilica.ProbeConfig(
+                    path="/health",
+                    initial_delay_seconds=60,
+                    period_seconds=30,
+                    timeout_seconds=10,
+                    failure_threshold=10,
+                ),
+            ),
+        )
         env = dict(self.pass_through_env)
         for var in ("HF_TOKEN",):
             val = os.environ.get(var)
