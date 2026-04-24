@@ -1,0 +1,33 @@
+# L3 kernel-search knob catalog.
+#
+# Unlike L1/L2 which search numeric/categorical HW + engine knobs, L3
+# searches *kernel source code*. The categorical fields below are the
+# Optuna-searchable surface (what the surrogate picks). The kernel
+# source itself is a free-form Python/Triton string supplied by the
+# LLM proposer (warmstart / operator) — never by the surrogate.
+#
+# Fields per knob are the same shape L1 uses (see l1_engine/knobs.yaml).
+
+knobs:
+  target_op:
+    type: categorical
+    values: [rmsnorm, silu_mul, rope]
+    default: rmsnorm
+    axis: quality
+    description: Which transformer op the kernel candidate replaces.
+
+  dtype:
+    type: categorical
+    values: [float32, float16, bfloat16]
+    default: float32
+    axis: quality
+    description: Input/output tensor dtype the kernel must handle.
+
+  shape_regime:
+    type: categorical
+    values: [small, medium, large]
+    default: small
+    axis: throughput
+    description: Test-matrix size class; selects shapes for correctness + perf.
+
+constraints: []

@@ -1,0 +1,175 @@
+"""L3 kernel-search adapter.
+
+Executes an LLM-proposed kernel candidate against a per-op PyTorch
+reference, gates correctness (elementwise atol/rtol) and perf (ops/sec
+best-of-K), and returns a ``TrialOutput`` shaped like every other
+adapter — ``Measurement`` or typed ``FailureRecord`` (P3, P9).
+
+CPU-safe minimum viable: accepts Python source that operates on torch
+tensors. No Triton, no GPU required. Triton-on-GPU is a follow-up
+session — the adapter's contract doesn't change, only how ``source``
+is compiled (Triton ``@triton.jit`` path through ``triton.compile``
+instead of ``exec``).
+"""
+
+from __future__ import annotations
+
+import time
+from dataclasses import dataclass
+from typing import Any
+
+import torch
+
+from autoinfer.harness.failure import FailureKind, FailureRecord
+from autoinfer.harness.ledger import Measurement
+from autoinfer.layers import TrialInput, TrialOutput
+from autoinfer.layers.l3_kernel.baselines import REFERENCES, KernelFn
+from autoinfer.layers.l3_kernel.surface import (
+    REFERENCE_SOURCES,
+    KernelCallable,
+    KnobCatalog,
+    compile_candidate,
+    make_inputs,
+    resolve_dtype,
+    test_shapes,
+    to_surrogate_surface,
+)
+
+
+@dataclass
+class L3KernelAdapter:
+    """Correctness + perf gate for LLM-proposed kernel candidates."""
+
+    catalog: KnobCatalog
+    layer_name: str = "l3_kernel"
+    atol: float = 1e-3
+    rtol: float = 1e-3
+    perf_repeats: int = 5
+    warmup_runs: int = 2
+    perf_seed: int = 1_000_003
+
+    def surface(self) -> dict[str, Any]:
+        # Only the categorical knobs flow into the surrogate surface;
+        # ``source`` / ``entry_fn`` come from the LLM proposer.
+        return to_surrogate_surface(self.catalog)
+
+    def run(self, trial: TrialInput) -> TrialOutput:
+        cfg = trial.config
+        missing = [k for k in ("target_op", "dtype", "shape_regime") if k not in cfg]
+        if missing:
+            return self._failure(trial, FailureKind.STARTUP, f"missing config keys: {missing}")
+
+        target_op = str(cfg["target_op"])
+        reference = REFERENCES.get(target_op)
+        if reference is None:
+            return self._failure(trial, FailureKind.STARTUP, f"unknown target_op {target_op!r}")
+
+        try:
+            dtype = resolve_dtype(str(cfg["dtype"]))
+            shapes = test_shapes(target_op, str(cfg["shape_regime"]))
+        except ValueError as e:
+            return self._failure(trial, FailureKind.STARTUP, str(e))
+
+        # Surrogate-only path lacks source/entry_fn (only LLM proposers
+        # generate them). Fall back to the reference source for that op
+        # so the CPU-only plumbing is exercisable; real kernel search
+        # requires an LLM proposer to override these keys.
+        source = cfg.get("source")
+        entry_fn = cfg.get("entry_fn")
+        if source is None or entry_fn is None:
+            ref_entry, ref_source = REFERENCE_SOURCES[target_op]
+            source = source if source is not None else ref_source
+            entry_fn = entry_fn if entry_fn is not None else ref_entry
+
+        try:
+            candidate = compile_candidate(str(source), str(entry_fn))
+        except (ValueError, KeyError) as e:
+            return self._failure(trial, FailureKind.STARTUP, f"compile failed: {e}")
+
+        try:
+            max_abs_err = self._check_correctness(candidate, reference, shapes, dtype)
+        except Exception as e:  # noqa: BLE001 - candidate may raise anything
+            return self._failure(trial, FailureKind.STARTUP, f"candidate raised during correctness: {e}")
+
+        if max_abs_err is None:
+            return self._failure(
+                trial,
+                FailureKind.QUALITY_KL,
+                f"candidate exceeded atol={self.atol}/rtol={self.rtol}",
+            )
+
+        try:
+            ops_per_sec = self._measure_perf(candidate, shapes, dtype)
+        except Exception as e:  # noqa: BLE001
+            return self._failure(trial, FailureKind.HANG, f"candidate raised during perf: {e}")
+
+        meas = Measurement(
+            tokens_per_sec=ops_per_sec,
+            ttft_p99_ms=0.0,
+            tpot_p99_ms=0.0,
+            peak_hbm_gb=0.0,
+            kl_divergence=0.0,
+            extra={"max_abs_err": max_abs_err, "n_shapes": float(len(shapes))},
+        )
+        return TrialOutput(measurement=meas, failure=None)
+
+    def teardown(self) -> None:
+        return None
+
+    def _check_correctness(
+        self,
+        candidate: KernelCallable,
+        reference: KernelFn,
+        shapes: tuple[Any, ...],
+        dtype: torch.dtype,
+    ) -> float | None:
+        """Return the max observed abs-err if all inputs pass; else None."""
+        max_err = 0.0
+        for i, spec in enumerate(shapes):
+            inputs = make_inputs(spec, dtype, seed=17 + i)
+            expected = reference(*inputs)
+            actual = candidate(*inputs)
+            if actual.shape != expected.shape:
+                return None
+            diff = (actual.to(torch.float32) - expected.to(torch.float32)).abs()
+            tol = self.atol + self.rtol * expected.to(torch.float32).abs()
+            if (diff > tol).any().item():
+                return None
+            max_err = max(max_err, float(diff.max().item()))
+        return max_err
+
+    def _measure_perf(
+        self,
+        candidate: KernelCallable,
+        shapes: tuple[Any, ...],
+        dtype: torch.dtype,
+    ) -> float:
+        """Best-of-K ops/sec at the largest shape in the regime."""
+        spec = shapes[-1]
+        inputs = make_inputs(spec, dtype, seed=self.perf_seed)
+        for _ in range(self.warmup_runs):
+            candidate(*inputs)
+        best = float("inf")
+        for _ in range(self.perf_repeats):
+            t0 = time.perf_counter()
+            candidate(*inputs)
+            elapsed = time.perf_counter() - t0
+            if elapsed < best:
+                best = elapsed
+        if best <= 0.0 or not (best < float("inf")):
+            raise RuntimeError(f"perf measurement degenerate: best={best}")
+        return 1.0 / best
+
+    def _failure(self, trial: TrialInput, kind: FailureKind, msg: str) -> TrialOutput:
+        return TrialOutput(
+            measurement=None,
+            failure=FailureRecord(
+                kind=kind,
+                message=msg[:500],
+                trial_id=trial.trial_id,
+                layer=self.layer_name,
+            ),
+        )
+
+
+__all__ = ["L3KernelAdapter"]

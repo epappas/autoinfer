@@ -32,12 +32,15 @@ from autoinfer.telemetry import EventLog, capture_hw_context, write_hw_context
 def build_runner(
     cfg: RunConfig, max_trials_override: int | None = None
 ) -> tuple[ContinuousRunner, Ledger]:
-    # L2 takes precedence over L1 when both are configured; iteration-zero
-    # runs exactly one layer at a time (multi-layer composition is future).
+    # L2 takes precedence over L1; L3 takes precedence over both when
+    # configured in isolation. Iteration-zero runs one layer at a time;
+    # joint L1xL2xL3 is a future composition that builds on this.
+    if cfg.layers.l3_kernel is not None and cfg.layers.l1_engine is None and cfg.layers.l2_topology is None:
+        return _build_l3_runner(cfg, max_trials_override)
     if cfg.layers.l2_topology is not None:
         return _build_l2_runner(cfg, max_trials_override)
     if cfg.layers.l1_engine is None:
-        raise ValueError("builder requires cfg.layers.l1_engine or cfg.layers.l2_topology")
+        raise ValueError("builder requires cfg.layers.l1_engine, l2_topology, or l3_kernel")
     l1_cfg = cfg.layers.l1_engine
     catalog = load_catalog(l1_cfg.knobs_path)
 
@@ -277,6 +280,99 @@ def _build_l2_runner(
     )
     runner = ContinuousRunner(
         scheduler=LayerScheduler({"l2_topology": spec}),
+        ledger=ledger,
+        objective_axis="tokens_per_sec",
+        maximize=True,
+        operator=operator,
+        events=events,
+    )
+    return runner, ledger
+
+
+def _build_l3_runner(
+    cfg: RunConfig, max_trials_override: int | None
+) -> tuple[ContinuousRunner, Ledger]:
+    """L3 kernel runner: LLM-proposed kernels vs PyTorch references.
+
+    CPU-safe minimum viable; no GPU or Triton required. Warmstart uses
+    the reference-kernel sources as seeds so the first trials have a
+    guaranteed-pass baseline.
+    """
+    from autoinfer.layers.l3_kernel import (
+        L3KernelAdapter,
+        reference_seed_configs,
+    )
+    from autoinfer.layers.l3_kernel import (
+        load_catalog as load_l3_catalog,
+    )
+
+    l3_cfg = cfg.layers.l3_kernel
+    assert l3_cfg is not None
+    catalog = load_l3_catalog(l3_cfg.knobs_path)
+
+    adapter = L3KernelAdapter(
+        catalog=catalog,
+        atol=l3_cfg.atol,
+        rtol=l3_cfg.rtol,
+        perf_repeats=l3_cfg.perf_repeats,
+        warmup_runs=l3_cfg.warmup_runs,
+    )
+
+    surrogate = OptunaSurrogate(
+        kind=cfg.policy.surrogate.kind,
+        seed=cfg.policy.surrogate.seed,
+        surface=adapter.surface(),
+        objective_axis="tokens_per_sec",
+        maximize=True,
+    )
+
+    seeds = reference_seed_configs()
+    warmstart = _build_warmstart_with_seeds(cfg.policy.warmstart, seeds)
+
+    operator: Operator | None = None
+    if cfg.policy.operator is not None:
+        op_llm = _build_warmstart_with_seeds(
+            WarmstartConfig(
+                provider=cfg.policy.warmstart.provider,
+                llm_model=cfg.policy.operator.llm_model,
+                base_url=cfg.policy.warmstart.base_url,
+                api_key_env=cfg.policy.warmstart.api_key_env,
+                seed_configs=cfg.policy.warmstart.seed_configs,
+                hardware_notes=cfg.policy.warmstart.hardware_notes,
+            ),
+            seeds,
+        )
+        operator = Operator(llm=op_llm, cadence=cfg.policy.operator.cadence)
+
+    max_trials = max_trials_override if max_trials_override is not None else l3_cfg.max_trials
+    spec = LayerSpec(
+        adapter=adapter,
+        surrogate=surrogate,
+        warmstart=warmstart,
+        max_trials=max_trials,
+        warmstart_n=min(cfg.policy.warmstart.n_configs, len(seeds)),
+        warmstart_prior=cfg.policy.warmstart.hardware_notes or "",
+    )
+
+    ledger_dir = Path(cfg.harness.ledger.output_dir)
+    ledger = Ledger(output_dir=ledger_dir, pareto_axes=cfg.harness.ledger.pareto_axes)
+    run_id = uuid.uuid4().hex[:12]
+    events = EventLog(ledger_dir / "events.jsonl", run_id=run_id)
+    hw_ctx = capture_hw_context()
+    write_hw_context(ledger_dir / "hw_context.json", hw_ctx)
+    events.emit(
+        "config_loaded",
+        name=cfg.name,
+        layer="l3_kernel",
+        max_trials=max_trials,
+        warmstart_provider=cfg.policy.warmstart.provider,
+        surrogate_kind=cfg.policy.surrogate.kind,
+        operator_cadence=cfg.policy.operator.cadence if cfg.policy.operator else None,
+        atol=l3_cfg.atol,
+        rtol=l3_cfg.rtol,
+    )
+    runner = ContinuousRunner(
+        scheduler=LayerScheduler({"l3_kernel": spec}),
         ledger=ledger,
         objective_axis="tokens_per_sec",
         maximize=True,

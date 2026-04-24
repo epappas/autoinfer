@@ -134,7 +134,12 @@ class L2TopologyConfig(_Base):
 
 
 class L3KernelConfig(_Base):
-    max_trials: int = Field(ge=0, default=0)
+    knobs_path: Path
+    max_trials: int = Field(ge=1, default=6)
+    atol: float = Field(gt=0.0, default=1e-3)
+    rtol: float = Field(gt=0.0, default=1e-3)
+    perf_repeats: int = Field(ge=1, default=5)
+    warmup_runs: int = Field(ge=0, default=2)
 
 
 class LayersConfig(_Base):

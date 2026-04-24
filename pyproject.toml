@@ -25,6 +25,7 @@ basilica = ["basilica-sdk>=0.20"]
 policy = ["optuna>=3.5"]
 vllm = ["vllm>=0.7"]
 llm = ["anthropic>=0.50"]
+l3 = ["torch>=2.1"]
 dev = [
   "pytest>=8.0",
   "pytest-cov>=5.0",
@@ -32,6 +33,7 @@ dev = [
   "mypy>=1.10",
   "types-pyyaml>=6.0",
   "optuna>=3.5",
+  "torch>=2.1",
 ]
 
 [tool.setuptools]
@@ -67,5 +69,9 @@ warn_redundant_casts = true
 module = ["basilica", "basilica.*"]
 ignore_missing_imports = true
 
+[[tool.mypy.overrides]]
+module = ["torch", "torch.*"]
+ignore_missing_imports = true
+
 [tool.setuptools.package-data]
-autoinfer = ["py.typed", "layers/l1_engine/*.yaml"]
+autoinfer = ["py.typed", "layers/l1_engine/*.yaml", "layers/l2_topology/*.yaml", "layers/l3_kernel/*.yaml"]

@@ -303,7 +303,11 @@ dev = [
     { name = "pytest" },
     { name = "pytest-cov" },
     { name = "ruff" },
+    { name = "torch" },
     { name = "types-pyyaml" },
+]
+l3 = [
+    { name = "torch" },
 ]
 llm = [
     { name = "anthropic" },
@@ -329,12 +333,14 @@ requires-dist = [
     { name = "pytest-cov", marker = "extra == 'dev'", specifier = ">=5.0" },
     { name = "pyyaml", specifier = ">=6.0" },
     { name = "ruff", marker = "extra == 'dev'", specifier = ">=0.6" },
+    { name = "torch", marker = "extra == 'dev'", specifier = ">=2.1" },
+    { name = "torch", marker = "extra == 'l3'", specifier = ">=2.1" },
     { name = "typer", specifier = ">=0.12" },
     { name = "types-pyyaml", marker = "extra == 'dev'", specifier = ">=6.0" },
     { name = "typing-extensions", specifier = ">=4.9" },
     { name = "vllm", marker = "extra == 'vllm'", specifier = ">=0.7" },
 ]
-provides-extras = ["basilica", "policy", "vllm", "llm", "dev"]
+provides-extras = ["basilica", "policy", "vllm", "llm", "l3", "dev"]
 
 [[package]]
 name = "basilica-sdk"
