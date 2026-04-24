@@ -166,6 +166,20 @@ class ContinuousRunner:
         self.scheduler.notify_trial_done(layer)
         self._trials_since_operator[layer] = self._trials_since_operator.get(layer, 0) + 1
         self._stall.record(layer, self._score(entry))
+        # Cross-layer stale-signal invalidation (P4, thesis §5). If this
+        # newly-recorded entry is on the current Pareto frontier, tell the
+        # scheduler — it marks entries at layers ABOVE this one as stale
+        # (kernel win invalidates cached engine configs; topology win
+        # invalidates cached engine configs for other hardware).
+        if entry.kept and len(self.scheduler.specs) > 1:
+            front_ids = {e.trial_id for e in self.ledger.pareto_front()}
+            if tid in front_ids:
+                invalidated = self.scheduler.propagate_finding(layer, self.ledger)
+                if invalidated > 0:
+                    self._event(
+                        "stale_propagated",
+                        from_layer=layer, trial_id=tid, invalidated_count=invalidated,
+                    )
         self._event(
             "trial_complete",
             layer=layer, trial_id=tid, phase=phase, elapsed_s=elapsed,

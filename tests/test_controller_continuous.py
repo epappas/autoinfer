@@ -170,7 +170,18 @@ def test_runner_operator_fires_at_cadence(tmp_path: Path) -> None:
     assert len(op_tids) >= 1
 
 
-def test_runner_multi_layer_stale_invalidation_end_to_end(tmp_path: Path) -> None:
+def test_runner_multi_layer_stale_invalidation_fires_automatically(tmp_path: Path) -> None:
+    """Regression: the runner must call propagate_finding when a new
+    Pareto entry lands, so cross-layer stale-signal propagation happens
+    without any out-of-band calls (thesis P4).
+
+    Setup uses two layers (L1 + L3) with sham adapters that produce
+    identical measurements. Since equal measurements don't dominate
+    each other, both layers contribute entries to the Pareto frontier.
+    The L3 entries trigger propagate_finding("l3_kernel") which marks
+    L1 entries stale — we observe that directly without calling
+    propagate_finding ourselves.
+    """
     ledger = Ledger(tmp_path, pareto_axes=("tokens_per_sec",))
     scheduler = LayerScheduler(
         {
@@ -185,12 +196,33 @@ def test_runner_multi_layer_stale_invalidation_end_to_end(tmp_path: Path) -> Non
     )
     runner.run()
     assert len(ledger.entries()) == 4
-    n_flagged = scheduler.propagate_finding("l3_kernel", ledger)
-    assert n_flagged == 2
+
+    # runner should have auto-propagated; L1 entries must already be stale
     stale_layers = {e.layer for e in ledger.entries() if e.stale}
-    assert stale_layers == {"l1_engine"}
+    assert "l1_engine" in stale_layers
+    assert "l3_kernel" not in stale_layers
+
+    # a manual re-invocation should find nothing new to stale
+    n_extra = scheduler.propagate_finding("l3_kernel", ledger)
+    assert n_extra == 0
+
     front_layers = {e.layer for e in ledger.pareto_front()}
     assert front_layers == {"l3_kernel"}
+
+
+def test_runner_single_layer_does_not_propagate(tmp_path: Path) -> None:
+    """Single-layer runs must never call propagate_finding — there's
+    nothing to invalidate. Regression guard."""
+    ledger = Ledger(tmp_path, pareto_axes=("tokens_per_sec",))
+    spec = _spec("l1_engine", max_trials=3, warmstart_n=3)
+    runner = ContinuousRunner(
+        scheduler=LayerScheduler({"l1_engine": spec}),
+        ledger=ledger,
+        objective_axis="tokens_per_sec",
+    )
+    runner.run()
+    # no entries should be stale — propagate_finding wasn't called
+    assert all(not e.stale for e in ledger.entries())
 
 
 def test_runner_pareto_front_non_empty_after_valid_run(tmp_path: Path) -> None:
