@@ -35,31 +35,33 @@ policy:
     n_configs: 4
     api_key_env: OPENROUTER_API_KEY
     hardware_notes: |
-      Multi-GPU-class search on the Basilica spot marketplace.
-      Each trial provisions a fresh deployment; reference replica stays on
-      the campaign container's local GPU (RTX A6000, bfloat16).
+      Heterogeneous-GPU search on Basilica spot marketplace.
+      Each trial provisions a fresh deployment; reference replica stays
+      on the campaign container's local GPU, bfloat16.
 
       Available GPU types right now (sampled from list_secure_cloud_gpus):
-        - RTX A6000 (Ampere, 48 GB)
-        - L40 (Ada, 48 GB)
-        - L40S (Ada, 48 GB)
-        - RTX 6000 ADA (Ada, 48 GB)
-      H100 and A100 are NOT available at this snapshot.
+        - H100 (Hopper, sm_90, 80 GB, FP8-capable) — top tier
+        - A100 (Ampere, sm_80, 40 or 80 GB) — strong mid
+        - RTX A6000 (Ampere, sm_86, 48 GB) — baseline
 
-      None of the available types support FP8 (needs Hopper+).
-      Keep dtype in {bfloat16, float16, auto}; never propose quantization=fp8.
+      This is the thesis's load-bearing experiment: do the same knob
+      settings behave differently across GPU classes? Key axes:
+        - gpu_type (3 SKUs above)
+        - gpu_count (1 or 2)
+        - dtype (auto / float16 / bfloat16)
+        - gpu_memory_utilization (0.80 - 0.92)
+        - enforce_eager (true/false)
 
-      Available axes:
-        - gpu_type: pick from the four listed above
-        - gpu_count: 1, 2, or 4
-        - dtype: auto / float16 / bfloat16
-        - gpu_memory_utilization: 0.80 - 0.92
-        - enforce_eager: true/false
+      Hardware-compat rules to respect:
+        - Only H100 supports FP8 KV / FP8 weights; quantization=fp8 fails
+          startup on A100 and A6000.
+        - bfloat16 is preferred on all three for Qwen3-8B stability.
 
       What to explore:
-        - L40S vs RTX A6000 at gpu_count=2 (different memory bandwidth)
-        - gpu_count=4 on whichever class has higher availability
-        - bfloat16 vs float16 at the same hardware
+        - H100 vs A6000 at gpu_count=1: how much throughput does top tier
+          buy over baseline?
+        - A100 at gpu_count=1: mid-tier inflection point
+        - bfloat16 vs float16 at the same hardware (numerical drift)
   surrogate:
     kind: tpe
     seed: 0

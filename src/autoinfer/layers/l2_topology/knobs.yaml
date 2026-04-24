@@ -7,20 +7,24 @@ knobs:
   gpu_type:
     type: categorical
     values:
+      - "H100"
+      - "A100"
       - "RTX A6000"
-      - "L40"
-      - "L40S"
-      - "RTX 6000 ADA"
     default: "RTX A6000"
     basilica_deploy_vllm_kwarg: gpu_models
     coupled_with: [dtype, quantization]
     axis: throughput
-    description: GPU SKU to deploy on (Basilica spot marketplace).
+    description: |
+      GPU SKU to deploy on (Basilica spot marketplace).
+      H100 (Hopper, sm_90, 80 GB, FP8-capable) — fastest; also most
+      expensive.
+      A100 (Ampere, sm_80, 40 or 80 GB) — strong mid-tier.
+      RTX A6000 (Ampere, sm_86, 48 GB) — consumer-grade baseline.
 
   gpu_count:
     type: categorical
-    values: [1, 2, 4]
-    default: 2
+    values: [1, 2]
+    default: 1
     basilica_deploy_vllm_kwarg: gpu_count
     coupled_with: [tensor_parallel_size]
     axis: throughput
