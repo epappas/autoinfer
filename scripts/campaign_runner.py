@@ -46,9 +46,15 @@ def wait_for_port(host: str, port: int, timeout_s: int) -> bool:
 
 
 def install_extras(workdir: Path) -> None:
-    log("syncing extras: dev, vllm, llm")
+    log("syncing extras: dev, vllm, llm, basilica")
     subprocess.run(
-        ["uv", "sync", "--extra", "dev", "--extra", "vllm", "--extra", "llm"],
+        [
+            "uv", "sync",
+            "--extra", "dev",
+            "--extra", "vllm",
+            "--extra", "llm",
+            "--extra", "basilica",
+        ],
         cwd=str(workdir), check=True,
     )
 
