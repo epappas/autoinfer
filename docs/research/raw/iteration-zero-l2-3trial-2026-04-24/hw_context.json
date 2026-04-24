@@ -1,0 +1,29 @@
+{
+  "autoinfer_version": null,
+  "env": {
+    "CUDA_VISIBLE_DEVICES": "0"
+  },
+  "git_sha": "f0d497754eee8208cae5078f36787006015d3d0c",
+  "gpus": [
+    {
+      "compute_cap": "8.9",
+      "driver": "580.126.16",
+      "index": "0",
+      "memory_total_mib": "46068",
+      "memory_used_mib": "0",
+      "name": "NVIDIA L40S"
+    },
+    {
+      "compute_cap": "8.9",
+      "driver": "580.126.16",
+      "index": "1",
+      "memory_total_mib": "46068",
+      "memory_used_mib": "39273",
+      "name": "NVIDIA L40S"
+    }
+  ],
+  "platform": "Linux-6.17.0-14-generic-x86_64-with-glibc2.35",
+  "python": "3.11.9",
+  "torch_version": "2.4.1+cu124",
+  "vllm_version": null
+}
