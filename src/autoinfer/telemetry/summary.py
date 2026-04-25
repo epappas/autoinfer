@@ -51,6 +51,22 @@ def _git_sha() -> str | None:
 
 
 def _pip_show(pkg: str) -> str | None:
+    """Return the installed version of ``pkg`` (None if absent).
+
+    Uses ``importlib.metadata`` so it sees what THIS Python interpreter
+    can actually import — robust across pip/uv/poetry-managed envs.
+    Falls back to ``pip show`` (the original implementation) if metadata
+    lookup raises something unexpected.
+    """
+    try:
+        from importlib.metadata import PackageNotFoundError, version
+
+        try:
+            return version(pkg)
+        except PackageNotFoundError:
+            return None
+    except Exception:
+        pass
     try:
         out = subprocess.check_output(
             ["pip", "show", pkg], stderr=subprocess.DEVNULL, text=True, timeout=5,
