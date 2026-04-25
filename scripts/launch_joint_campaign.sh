@@ -1,35 +1,35 @@
 #!/usr/bin/env bash
-# Launch the joint L1 x L2 campaign on Basilica.
+# Launch a joint multi-layer campaign on Basilica.
 #
-# This is the thesis-grade experiment: one run combines local-GPU L1
-# (engine-config) trials with remote-Basilica L2 (topology) trials,
-# with cross-layer stale-signal propagation active (P4).
+# Two configs supported:
+#   - L1xL2 joint (default): engine-config + hardware topology
+#   - L1xL2xL3 joint: adds LLM-driven kernel search
 #
 # Preflight checks required env vars, prints a cost + time estimate,
 # and refuses to proceed without --yes.
 #
-# Defaults (--mode full):
-#   - config:    examples/qwen3-8b-l1-l2-joint/config.yaml
-#   - L1 trials: 14 (per config)
-#   - L2 trials: 6  (per config)
-#   - wall:      ~2.5 h (14 * ~2-3 min + 6 * ~20 min + overhead)
-#   - cost:      ~$30-50 on Basilica spot + ~$0.20 OpenRouter
-#
-# Smoke (--mode smoke): 2 L1 + 1 L2 trials; ~30-40 min; ~$5.
+# Modes:
+#   full   — config defaults
+#   smoke  — small per-layer caps for fast validation (~30-40 min)
+#   tiny   — minimum viable (1 L1 + 1 L2 + 2 L3) for sanity checks
 #
 # Usage:
 #   export BASILICA_API_TOKEN="..."
 #   export OPENROUTER_API_KEY="..."
-#   export HF_TOKEN="..."              # optional but recommended
+#   export HF_TOKEN="..."
+#
 #   ./scripts/launch_joint_campaign.sh --mode smoke --yes
-#   ./scripts/launch_joint_campaign.sh --mode full  --yes
+#   ./scripts/launch_joint_campaign.sh --mode full --yes
+#   ./scripts/launch_joint_campaign.sh \
+#       --config examples/qwen3-8b-l1-l2-l3-joint/config.yaml \
+#       --mode smoke --yes
 
 set -euo pipefail
 
 CONFIG="examples/qwen3-8b-l1-l2-joint/config.yaml"
 MODE="full"
 YES="no"
-ARTIFACTS_DIR="./basilica-artifacts/qwen3-8b-l1-l2-joint-$(date +%s)"
+ARTIFACTS_DIR=""
 
 while [[ $# -gt 0 ]]; do
     case "$1" in
@@ -49,24 +49,50 @@ fail() { echo "ERROR: $*" >&2; exit 1; }
 [[ -n "${OPENROUTER_API_KEY:-}" ]] || fail "OPENROUTER_API_KEY not set"
 [[ -f "$CONFIG" ]] || fail "config not found: $CONFIG"
 
+# Auto-detect which layers the config enables — affects smoke trial caps.
+HAS_L1=0; HAS_L2=0; HAS_L3=0
+grep -qE "^[[:space:]]+l1_engine:" "$CONFIG" && HAS_L1=1
+grep -qE "^[[:space:]]+l2_topology:" "$CONFIG" && HAS_L2=1
+grep -qE "^[[:space:]]+l3_kernel:" "$CONFIG" && HAS_L3=1
+
+CONFIG_NAME=$(basename "$(dirname "$CONFIG")")
+if [[ -z "$ARTIFACTS_DIR" ]]; then
+    ARTIFACTS_DIR="./basilica-artifacts/${CONFIG_NAME}-$(date +%s)"
+fi
+
 case "$MODE" in
     full)
         LAYER_ARGS=()
-        TRIALS_DESC="L1=14 L2=6 (per config)"
-        WALL_EST="~2.5 h"
+        TRIALS_DESC="per-config defaults (L1=$HAS_L1×N L2=$HAS_L2×N L3=$HAS_L3×N)"
+        WALL_EST="~2.5-3 h"
         COST_EST="~\$30-50 Basilica spot + ~\$0.20 OpenRouter"
         ;;
     smoke)
-        LAYER_ARGS=(--layer-trials l1_engine=2 --layer-trials l2_topology=1)
-        TRIALS_DESC="L1=2 L2=1 (smoke)"
+        LAYER_ARGS=()
+        SMOKE_DESC=()
+        [[ "$HAS_L1" == "1" ]] && { LAYER_ARGS+=(--layer-trials l1_engine=2); SMOKE_DESC+=("L1=2"); }
+        [[ "$HAS_L2" == "1" ]] && { LAYER_ARGS+=(--layer-trials l2_topology=1); SMOKE_DESC+=("L2=1"); }
+        [[ "$HAS_L3" == "1" ]] && { LAYER_ARGS+=(--layer-trials l3_kernel=3); SMOKE_DESC+=("L3=3"); }
+        TRIALS_DESC="${SMOKE_DESC[*]:-(none — config has no enabled layers?)}"
         WALL_EST="~30-40 min"
         COST_EST="~\$5 Basilica spot + ~\$0.05 OpenRouter"
         ;;
-    *) fail "unknown --mode: $MODE (expected smoke|full)" ;;
+    tiny)
+        LAYER_ARGS=()
+        TINY_DESC=()
+        [[ "$HAS_L1" == "1" ]] && { LAYER_ARGS+=(--layer-trials l1_engine=1); TINY_DESC+=("L1=1"); }
+        [[ "$HAS_L2" == "1" ]] && { LAYER_ARGS+=(--layer-trials l2_topology=1); TINY_DESC+=("L2=1"); }
+        [[ "$HAS_L3" == "1" ]] && { LAYER_ARGS+=(--layer-trials l3_kernel=2); TINY_DESC+=("L3=2"); }
+        TRIALS_DESC="${TINY_DESC[*]} (tiny)"
+        WALL_EST="~25-35 min"
+        COST_EST="~\$3 Basilica spot + ~\$0.03 OpenRouter"
+        ;;
+    *) fail "unknown --mode: $MODE (expected full|smoke|tiny)" ;;
 esac
 
-echo "=== joint L1 x L2 campaign launch plan ==="
+echo "=== joint campaign launch plan ==="
 echo "  config:        $CONFIG"
+echo "  layers:        L1=$HAS_L1  L2=$HAS_L2  L3=$HAS_L3"
 echo "  mode:          $MODE"
 echo "  trials:        $TRIALS_DESC"
 echo "  wall-clock:    $WALL_EST"
@@ -86,6 +112,6 @@ echo "=== launching ==="
 export PYTHONUNBUFFERED=1
 exec uv run python -u scripts/orchestrate_iteration_zero.py \
     --config "$CONFIG" \
-    --name "autoinfer-l1l2-joint-$(date +%s)" \
+    --name "autoinfer-${CONFIG_NAME}-$(date +%s)" \
     --artifacts-dir "$ARTIFACTS_DIR" \
     "${LAYER_ARGS[@]}"
