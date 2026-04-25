@@ -237,13 +237,37 @@ def _build_l3_spec(
     assert l3_cfg is not None
     catalog = load_l3_catalog(l3_cfg.knobs_path)
 
-    adapter = L3KernelAdapter(
-        catalog=catalog,
-        atol=l3_cfg.atol,
-        rtol=l3_cfg.rtol,
-        perf_repeats=l3_cfg.perf_repeats,
-        warmup_runs=l3_cfg.warmup_runs,
-    )
+    adapter: Any
+    if l3_cfg.mode == "vllm":
+        from autoinfer.layers.l3_kernel.vllm_adapter import L3VllmKernelAdapter
+
+        prompts = _resolve_gate_prompts(cfg)
+        effective_max_kl = _calibrate_max_kl(cfg, l3_cfg.model, prompts, label="l3")
+        adapter = L3VllmKernelAdapter(
+            model=l3_cfg.model,
+            catalog=catalog,
+            trace_path=cfg.harness.driver.trace_path,
+            reference_uri=cfg.harness.gate.replica_uri,
+            quality_prompts=prompts,
+            max_kl=effective_max_kl,
+            result_dir=cfg.harness.ledger.output_dir,
+            batch_sizes=cfg.harness.gate.batch_sizes,
+            candidate_port=l3_cfg.candidate_port,
+            startup_timeout_s=l3_cfg.startup_timeout_s,
+            dataset_name=cfg.harness.driver.dataset_name,
+            num_prompts=cfg.harness.driver.num_prompts,
+            atol=l3_cfg.atol,
+            rtol=l3_cfg.rtol,
+            extra_vllm_args=tuple(l3_cfg.extra_vllm_args),
+        )
+    else:
+        adapter = L3KernelAdapter(
+            catalog=catalog,
+            atol=l3_cfg.atol,
+            rtol=l3_cfg.rtol,
+            perf_repeats=l3_cfg.perf_repeats,
+            warmup_runs=l3_cfg.warmup_runs,
+        )
     surrogate = _build_surrogate(
         cfg, surface=adapter.surface(), objective_axis="tokens_per_sec", maximize=True,
     )

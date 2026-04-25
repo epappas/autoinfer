@@ -8,6 +8,11 @@ from autoinfer.layers.l3_kernel.baselines import (
     rope_ref,
     silu_mul_ref,
 )
+from autoinfer.layers.l3_kernel.injector import (
+    SUPPORTED_TARGET_OPS,
+    InjectionPlan,
+    render_wrapper_script,
+)
 from autoinfer.layers.l3_kernel.proposer import (
     KernelProposer,
     build_kernel_prompt,
@@ -28,12 +33,14 @@ from autoinfer.layers.l3_kernel.surface import (
 )
 
 __all__ = [
+    "InjectionPlan",
     "KernelCallable",
     "KernelFn",
     "KernelProposer",
     "L3KernelAdapter",
     "REFERENCES",
     "REFERENCE_SOURCES",
+    "SUPPORTED_TARGET_OPS",
     "ShapeSpec",
     "build_kernel_prompt",
     "compile_candidate",
@@ -41,6 +48,7 @@ __all__ = [
     "make_inputs",
     "parse_kernel_blocks",
     "reference_seed_configs",
+    "render_wrapper_script",
     "resolve_dtype",
     "rmsnorm_ref",
     "rope_ref",

@@ -175,6 +175,9 @@ class L2TopologyConfig(_Base):
 
 
 class L3KernelConfig(_Base):
+    model: str = "Qwen/Qwen3-8B"
+    """Required for mode='vllm'. Ignored in mode='cpu'."""
+
     knobs_path: Path
     max_trials: int = Field(ge=1, default=6)
     reserve_cap: int = Field(ge=0, default=0)
@@ -182,6 +185,33 @@ class L3KernelConfig(_Base):
     rtol: float = Field(gt=0.0, default=1e-3)
     perf_repeats: int = Field(ge=1, default=5)
     warmup_runs: int = Field(ge=0, default=2)
+    mode: Literal["cpu", "vllm"] = Field(
+        default="cpu",
+        description=(
+            "'cpu' uses L3KernelAdapter — times the kernel in isolation, "
+            "produces ops/sec, sets pareto_eligible=False. Useful for "
+            "fast correctness validation and dev workflows. "
+            "'vllm' uses L3VllmKernelAdapter — ships the kernel into "
+            "vLLM via runtime monkeypatch, runs vllm bench serve, and "
+            "produces real end-to-end token throughput in the same "
+            "units as L1/L2 (pareto_eligible=True). The vllm mode is "
+            "the load-bearing thesis-grade L3 path. Default 'cpu' so "
+            "tests + dev work without a GPU; campaign configs should "
+            "opt into 'vllm'."
+        ),
+    )
+    candidate_port: int = Field(ge=1024, le=65535, default=8200)
+    """Distinct from L1's default 8000 so a joint campaign running both
+    L1 and L3-vllm in the same container doesn't collide."""
+
+    startup_timeout_s: int = Field(ge=30, default=600)
+    extra_vllm_args: list[str] = Field(
+        default_factory=list,
+        description=(
+            "Additional ``vllm serve`` CLI args appended after the "
+            "canonical model + port prefix when mode='vllm'."
+        ),
+    )
 
 
 class LayersConfig(_Base):

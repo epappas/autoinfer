@@ -121,16 +121,27 @@ layers:
     ttl_seconds: 3600
     deploy_timeout_s: 2100
   l3_kernel:
+    model: Qwen/Qwen3-8B
     knobs_path: src/autoinfer/layers/l3_kernel/knobs.yaml
-    # L3 trials are very cheap (~10-30 s each); allocate generously.
-    # Reserve_cap=0 because L3 is the deepest layer — nothing to
-    # invalidate via stale-signal in the other direction.
-    max_trials: 12
+    # mode='vllm' ships the candidate kernel into vLLM via runtime
+    # monkeypatch, runs vllm bench serve, and reports REAL end-to-end
+    # token throughput in the same units as L1/L2. This is the load-
+    # bearing kernel-into-vLLM integration. mode='cpu' (the default)
+    # times kernels in isolation and produces ops/sec — useful for
+    # development without a GPU but Pareto-ineligible for the joint
+    # frontier.
+    mode: vllm
+    # L3 trials in vllm mode are expensive (~3-5 min each, comparable
+    # to L1) because every trial spawns a patched vLLM and runs the
+    # full bench + gate. Smaller budget than the cpu mode's 12.
+    max_trials: 6
     reserve_cap: 0
     atol: 1e-3
     rtol: 1e-3
     perf_repeats: 5
     warmup_runs: 2
+    candidate_port: 8200
+    startup_timeout_s: 600
 
 target:
   kind: local
