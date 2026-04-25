@@ -1,0 +1,31 @@
+trial_id	layer	phase	outcome	tokens_per_sec	ttft_p99_ms	tpot_p99_ms	peak_hbm_gb	kl_divergence	failure_kind	attention_backend	kv_cache_dtype	enable_prefix_caching	enable_chunked_prefill	block_size	max_num_batched_tokens	max_num_seqs	gpu_memory_utilization	quantization	dtype
+l1_engine_w0000	l1_engine	warmstart	stale	429.81340388353686	15082.898134482093	133.7844201860327	68.1884765625	3.7507758770272206		FLASH_ATTN	auto	True	True	16	4096	128	0.85	none	bfloat16
+l1_engine_w0001	l1_engine	warmstart	stale	813.7049130287918	1496.084600938484	111.0589129012076	71.9658203125	3.3914611486974264		FLASHINFER	auto	False	True	32	8192	64	0.9	none	bfloat16
+l1_engine_w0002	l1_engine	warmstart	failure:startup						startup	XFORMERS	auto	True	True	16	6144	256	0.88	awq	float16
+l1_engine_w0003	l1_engine	warmstart	failure:startup						startup	TRITON_ATTN	auto	False	True	32	2048	512	0.92	gptq	bfloat16
+l1_engine_o0004	l1_engine	operator	stale	443.16391659729607	15888.87510495726	104.53034586583557	70.2626953125	3.8966839484951628		FLASHINFER	auto	True	True	16	8192	128	0.87	none	bfloat16
+l1_engine_s0005	l1_engine	surrogate	failure:startup						startup	FLASHINFER	fp8_e5m2	True	False	32	2048	64	0.9467927513349146	awq	auto
+l1_engine_s0006	l1_engine	surrogate	failure:startup						startup	FLASH_ATTN	fp8_e4m3	False	True	32	8192	64	0.8313315134142252	gptq	float16
+l1_engine_s0007	l1_engine	surrogate	failure:startup						startup	TRITON_ATTN	auto	True	False	32	8192	256	0.8863919743334269	none	float16
+l1_engine_s0008	l1_engine	surrogate	failure:quality_kl						quality_kl	XFORMERS	auto	True	True	16	2048	32	0.9434125452084836	fp8	float16
+l1_engine_o0009	l1_engine	operator	stale	757.6929690122997	1480.851328750141	86.35570509957948	71.3876953125	2.2248738479817622		FLASHINFER	auto	True	True	32	6144	128	0.89	none	bfloat16
+l2_topology_w0000	l2_topology	warmstart	kept	932.9289625673432	8192.84054969903	83.83106731876198	0.0	2.822362167694627									0.88		bfloat16
+l2_topology_w0001	l2_topology	warmstart	failure:startup						startup								0.85		bfloat16
+l2_topology_w0002	l2_topology	warmstart	failure:startup						startup								0.92		float16
+l2_topology_w0003	l2_topology	warmstart	kept	752.531240643967	8144.543871032074	125.04791657129921	0.0	1.7595917801348215									0.8		auto
+l1_engine_s0010	l1_engine	surrogate	failure:startup						startup	XFORMERS	fp8_e5m2	True	False	32	8192	512	0.9210978438087516	gptq	float16
+l1_engine_s0011	l1_engine	surrogate	failure:startup						startup	FLASHINFER	fp8_e4m3	True	True	16	8192	32	0.8597331593324138	awq	bfloat16
+l1_engine_s0012	l1_engine	surrogate	failure:startup						startup	FLASH_ATTN	fp8	True	False	32	32768	512	0.8278453916458929	fp8	float16
+l1_engine_s0013	l1_engine	surrogate	failure:startup						startup	TRITON_ATTN	auto	True	False	16	4096	64	0.9442904567820843	gptq	auto
+l3_kernel_w0000	l3_kernel	warmstart	failure:startup						startup										bfloat16
+l3_kernel_w0001	l3_kernel	warmstart	kept	82008.84625372336	0.0	0.0	0.0	0.0											float16
+l3_kernel_w0002	l3_kernel	warmstart	kept	30851.104011033214	0.0	0.0	0.0	0.0											float32
+l3_kernel_s0003	l3_kernel	surrogate	kept	27026.311028329077	0.0	0.0	0.0	0.0											bfloat16
+l3_kernel_o0004	l3_kernel	operator	kept	26531.7969854213	0.0	0.0	0.0	0.0											bfloat16
+l3_kernel_s0005	l3_kernel	surrogate	kept	29407.513153029784	0.0	0.0	0.0	0.0											float16
+l3_kernel_s0006	l3_kernel	surrogate	kept	0.5555404744893637	0.0	0.0	0.0	0.0											float32
+l3_kernel_s0007	l3_kernel	surrogate	kept	0.8333740039113537	0.0	0.0	0.0	0.0											float16
+l3_kernel_s0008	l3_kernel	surrogate	kept	37268.46773801673	0.0	0.0	0.0	0.0											float32
+l3_kernel_o0009	l3_kernel	operator	kept	98404.60285020391	0.0	0.0	0.0	0.0											float16
+l3_kernel_s0010	l3_kernel	surrogate	kept	25128.81788928024	0.0	0.0	0.0	0.0											bfloat16
+l3_kernel_s0011	l3_kernel	surrogate	kept	0.6666554135824684	0.0	0.0	0.0	0.0											float16

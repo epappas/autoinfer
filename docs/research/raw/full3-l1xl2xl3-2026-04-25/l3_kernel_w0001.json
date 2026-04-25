@@ -1,0 +1,25 @@
+{
+  "config": {
+    "dtype": "float16",
+    "entry_fn": "silu_mul_fused_kernel",
+    "shape_regime": "medium",
+    "source": "import torch\n\ndef silu_mul_fused_kernel(a):\n    x, y = a.chunk(2, dim=-1)\n    sigmoid_x = torch.sigmoid(x)\n    return x * sigmoid_x * y",
+    "target_op": "silu_mul"
+  },
+  "failure": null,
+  "layer": "l3_kernel",
+  "measurement": {
+    "extra": {
+      "max_abs_err": 0.00390625,
+      "n_shapes": 2.0
+    },
+    "kl_divergence": 0.0,
+    "peak_hbm_gb": 0.0,
+    "tokens_per_sec": 82008.84625372336,
+    "tpot_p99_ms": 0.0,
+    "ttft_p99_ms": 0.0
+  },
+  "pareto_eligible": false,
+  "stale": false,
+  "trial_id": "l3_kernel_w0001"
+}

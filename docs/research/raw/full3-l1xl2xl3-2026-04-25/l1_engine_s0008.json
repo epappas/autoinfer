@@ -1,0 +1,26 @@
+{
+  "config": {
+    "attention_backend": "XFORMERS",
+    "block_size": 16,
+    "dtype": "float16",
+    "enable_chunked_prefill": true,
+    "enable_prefix_caching": true,
+    "gpu_memory_utilization": 0.9434125452084836,
+    "kv_cache_dtype": "auto",
+    "max_num_batched_tokens": 2048,
+    "max_num_seqs": 32,
+    "quantization": "fp8"
+  },
+  "failure": {
+    "kind": "quality_kl",
+    "layer": "l1_engine",
+    "message": "gate rejected mean_kl=inf invariant=True",
+    "metadata": {},
+    "trial_id": "l1_engine_s0008"
+  },
+  "layer": "l1_engine",
+  "measurement": null,
+  "pareto_eligible": true,
+  "stale": true,
+  "trial_id": "l1_engine_s0008"
+}

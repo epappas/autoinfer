@@ -1,0 +1,26 @@
+{
+  "config": {
+    "attention_backend": "FLASH_ATTN",
+    "block_size": 32,
+    "dtype": "float16",
+    "enable_chunked_prefill": false,
+    "enable_prefix_caching": true,
+    "gpu_memory_utilization": 0.8278453916458929,
+    "kv_cache_dtype": "fp8",
+    "max_num_batched_tokens": 32768,
+    "max_num_seqs": 512,
+    "quantization": "fp8"
+  },
+  "failure": {
+    "kind": "startup",
+    "layer": "l1_engine",
+    "message": "startup failed: candidate exited during startup (code 1): 60). This effectively limits the maximum sequence length to max_num_batched_tokens and makes vLLM reject longer sequences. Please increase max_num_batched_tokens or decrease max_model_len. [type=value_error, input_value=ArgsKwargs((), {'runner_t..., 'stream_interval': 1}), input_type=ArgsKwargs]\n(APIServer pid=16122)     For further information visit https://errors.pydantic.dev/2.13/v/value_error\n",
+    "metadata": {},
+    "trial_id": "l1_engine_s0012"
+  },
+  "layer": "l1_engine",
+  "measurement": null,
+  "pareto_eligible": true,
+  "stale": false,
+  "trial_id": "l1_engine_s0012"
+}

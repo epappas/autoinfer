@@ -1,0 +1,21 @@
+{
+  "config": {
+    "dtype": "bfloat16",
+    "enforce_eager": true,
+    "gpu_count": 1,
+    "gpu_memory_utilization": 0.85,
+    "gpu_type": "H100"
+  },
+  "failure": {
+    "kind": "startup",
+    "layer": "l2_topology",
+    "message": "deploy_vllm: error sending request for url (https://api.basilica.ai/deployments/2831151d-89d6-4096-a976-4ba41cbb9d99): connection error: timed out",
+    "metadata": {},
+    "trial_id": "l2_topology_w0001"
+  },
+  "layer": "l2_topology",
+  "measurement": null,
+  "pareto_eligible": true,
+  "stale": false,
+  "trial_id": "l2_topology_w0001"
+}
