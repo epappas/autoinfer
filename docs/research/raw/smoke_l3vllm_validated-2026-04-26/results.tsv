@@ -1,0 +1,9 @@
+trial_id	layer	phase	outcome	tokens_per_sec	ttft_p99_ms	tpot_p99_ms	peak_hbm_gb	kl_divergence	failure_kind	attention_backend	kv_cache_dtype	enable_prefix_caching	enable_chunked_prefill	block_size	max_num_batched_tokens	max_num_seqs	gpu_memory_utilization	quantization	dtype
+l1_engine_w0000	l1_engine	warmstart	stale	451.704228791388	15403.288021045737	132.1643617081765	68.1884765625	1.6292167902711423		FLASH_ATTN	auto	True	True	16	4096	128	0.85	none	bfloat16
+l1_engine_w0001	l1_engine	warmstart	stale	730.1536651148555	1429.1218911390752	111.06856872793269	71.9658203125	1.1104035865854138		FLASHINFER	auto	False	True	32	8192	64	0.9	none	bfloat16
+l2_topology_w0000	l2_topology	warmstart	kept	929.6839692592131	8251.238781739958	85.45553018338978	0.0	2.381835734009998									0.85		bfloat16
+l1_engine_s0002	l1_engine	surrogate	failure:startup						startup	FLASHINFER	fp8_e5m2	True	False	32	2048	64	0.9467927513349146	awq	auto
+l1_engine_s0003	l1_engine	surrogate	failure:startup						startup	FLASH_ATTN	fp8_e4m3	False	True	32	8192	64	0.8313315134142252	gptq	float16
+l3_kernel_w0000	l3_kernel	warmstart	kept	867.4433440470923	1546.8795514572412	127.069671228528	72.8974609375	1.977169647322706											bfloat16
+l3_kernel_w0001	l3_kernel	warmstart	kept	408.81502770793935	16446.778069911525	123.65327952895305	72.8935546875	2.0613539403971246											float16
+l3_kernel_w0002	l3_kernel	warmstart	failure:startup						startup										float32

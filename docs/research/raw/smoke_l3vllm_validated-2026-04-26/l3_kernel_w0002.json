@@ -1,0 +1,21 @@
+{
+  "config": {
+    "dtype": "float32",
+    "entry_fn": "rope_kernel",
+    "shape_regime": "small",
+    "source": "import torch\nimport triton\nimport triton.language as tl\n\n@triton.jit\ndef rope_triton_kernel(\n    q_ptr, cos_ptr, sin_ptr, out_ptr,\n    n_elements, last_dim,\n    BLOCK_SIZE: tl.constexpr,\n):\n    pid = tl.program_id(0)\n    block_start = pid * BLOCK_SIZE\n    offsets = block_start + tl.arange(0, BLOCK_SIZE)\n    mask = offsets < n_elements\n    \n    # Calculate position in last dimension\n    pos_in_last_dim = offsets % last_dim\n    \n    # Load q values\n    q_val = tl.load(q_ptr + offsets, mask=mask, other=0.0)\n    \n    # Determine if this is even or odd position\n    is_even = (pos_in_last_dim % 2) == 0\n    \n    # Calculate paired position (even->odd+1, odd->even-1)\n    pair_offset = tl.where(is_even, offsets + 1, offsets - 1)\n    pair_mask = mask & (pair_offset < n_elements) & ((pair_offset % last_dim) < last_dim)\n    q_pair = tl.load(q_ptr + pair_offset, mask=pair_mask, other=0.0)\n    \n    # Load cos/sin values (use even positions for indexing)\n    cos_offset = tl.where(is_even, offsets, offsets - 1)\n    cos_val = tl.load(cos_ptr + cos_offset, mask=mask, other=1.0)\n    sin_val = tl.load(sin_ptr + cos_offset, mask=mask, other=0.0)\n    \n    # Apply RoPE rotation\n    result = tl.where(\n        is_even,\n        q_val * cos_val - q_pair * sin_val,  # even: q_even * cos - q_odd * sin\n        q_val * sin_val + q_pair * cos_val   # odd: q_even * sin + q_odd * cos\n    )\n    \n    tl.store(out_ptr + offsets, result, mask=mask)\n\ndef rope_kernel(q, cos, sin):\n    try:\n        orig_shape = q.shape\n        q_flat = q.view(-1)\n        cos_flat = cos.view(-1)\n        sin_flat = sin.view(-1)\n        \n        n_elements = q_flat.numel()\n        last_dim = orig_shape[-1]\n        \n        out = torch.empty_like(q_flat)\n        \n        BLOCK_SIZE = 1024\n        grid = (triton.cdiv(n_elements, BLOCK_SIZE),)\n        \n        rope_triton_kernel[grid](\n            q_flat, cos_flat, sin_flat, out,\n            n_elements, last_dim,\n            BLOCK_SIZE=BLOCK_SIZE,\n        )\n        \n        return out.view(orig_shape)\n    except:\n        # Fallback to reference implementation\n        q_even = q[..., 0::2]\n        q_odd = q[..., 1::2]\n        c = cos[..., 0::2]\n        s = sin[..., 0::2]\n        out = torch.empty_like(q)\n        out[..., 0::2] = q_even * c - q_odd * s\n        out[..., 1::2] = q_even * s + q_odd * c\n        return out",
+    "target_op": "rope"
+  },
+  "failure": {
+    "kind": "startup",
+    "layer": "l3_kernel",
+    "message": "target_op 'rope' not supported by vLLM injector (supported: ['rmsnorm', 'silu_mul'])",
+    "metadata": {},
+    "trial_id": "l3_kernel_w0002"
+  },
+  "layer": "l3_kernel",
+  "measurement": null,
+  "pareto_eligible": true,
+  "stale": false,
+  "trial_id": "l3_kernel_w0002"
+}
