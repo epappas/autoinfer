@@ -171,6 +171,36 @@ def test_silu_mul_adapter_passes_through_signature() -> None:
     assert out == "silu(input_tensor)"
 
 
+def test_wrapper_guards_main_for_multiprocessing_spawn() -> None:
+    """Regression: vLLM v1's engine-core subprocess uses
+    multiprocessing.spawn, which RE-RUNS the parent's main script in
+    each child. Without ``if __name__ == "__main__"`` around the
+    serve invocation, the child also calls _vllm_main() and tries to
+    spawn another engine, infinite-recursing. Smoke 2026-04-25 23:21
+    surfaced this.
+
+    The patch itself MUST run unconditionally in both parent and
+    child — the subprocess loads vllm independently and needs the
+    same forward_cuda override."""
+    plan = InjectionPlan(
+        target_op="rmsnorm",
+        entry_fn="f",
+        source="def f(x, w, eps): return x",
+    )
+    script = render_wrapper_script(plan, ["vllm", "serve", "Q"])
+    assert "_patch_vllm_op()" in script
+    assert 'if __name__ == "__main__":' in script
+    # serve invocation is INSIDE the __main__ guard
+    main_idx = script.index('if __name__ == "__main__":')
+    # Look for the actual SystemExit-wrapped invocation, not the
+    # string occurring in the explanatory comment above the guard.
+    serve_idx = script.index("SystemExit(_vllm_main())")
+    assert serve_idx > main_idx, "serve invocation must be inside __main__ guard"
+    # patch is OUTSIDE the guard
+    patch_idx = script.index("_patch_vllm_op()")
+    assert patch_idx < main_idx, "patch must run unconditionally (outside __main__ guard)"
+
+
 def test_render_script_no_unsubstituted_placeholders() -> None:
     """All ``{name}`` placeholders must be filled — leftover ``{...}``
     in the rendered script would crash at exec time."""

@@ -186,12 +186,19 @@ def _patch_vllm_op():
     )
 
 
+# vLLM v1 forks an engine-core subprocess via multiprocessing.spawn.
+# spawn re-runs the parent's main script in the child; without an
+# __name__ guard the child also calls _vllm_main(), which in turn
+# tries to spawn another engine, recursing until the OS gives up.
+# Both branches still apply the patch — the subprocess loads the same
+# vllm modules and needs the patched forward_cuda just like the parent.
 _patch_vllm_op()
 
-sys.argv = {argv}
-from vllm.entrypoints.cli.main import main as _vllm_main
+if __name__ == "__main__":
+    sys.argv = {argv}
+    from vllm.entrypoints.cli.main import main as _vllm_main
 
-raise SystemExit(_vllm_main())
+    raise SystemExit(_vllm_main())
 '''
 
 
