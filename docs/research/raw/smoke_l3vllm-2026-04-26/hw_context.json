@@ -1,0 +1,29 @@
+{
+  "autoinfer_version": "0.1.0",
+  "env": {
+    "CUDA_VISIBLE_DEVICES": "0"
+  },
+  "git_sha": "78703c354bd75d804693ff582558b688f7fdf870",
+  "gpus": [
+    {
+      "compute_cap": "8.0",
+      "driver": "580.126.09",
+      "index": "0",
+      "memory_total_mib": "40960",
+      "memory_used_mib": "0",
+      "name": "NVIDIA A100-SXM4-40GB"
+    },
+    {
+      "compute_cap": "8.0",
+      "driver": "580.126.09",
+      "index": "1",
+      "memory_total_mib": "40960",
+      "memory_used_mib": "34939",
+      "name": "NVIDIA A100-SXM4-40GB"
+    }
+  ],
+  "platform": "Linux-6.8.0-100-generic-x86_64-with-glibc2.35",
+  "python": "3.11.9",
+  "torch_version": "2.10.0",
+  "vllm_version": "0.19.1"
+}

@@ -1,0 +1,58 @@
+{
+  "elapsed_s": 1833.7651159460002,
+  "failures_by_kind": {
+    "startup": 4
+  },
+  "hw_context": {
+    "autoinfer_version": "0.1.0",
+    "env": {
+      "CUDA_VISIBLE_DEVICES": "0"
+    },
+    "git_sha": "78703c354bd75d804693ff582558b688f7fdf870",
+    "gpus": [
+      {
+        "compute_cap": "8.0",
+        "driver": "580.126.09",
+        "index": "0",
+        "memory_total_mib": "40960",
+        "memory_used_mib": "427",
+        "name": "NVIDIA A100-SXM4-40GB"
+      },
+      {
+        "compute_cap": "8.0",
+        "driver": "580.126.09",
+        "index": "1",
+        "memory_total_mib": "40960",
+        "memory_used_mib": "34939",
+        "name": "NVIDIA A100-SXM4-40GB"
+      }
+    ],
+    "platform": "Linux-6.8.0-100-generic-x86_64-with-glibc2.35",
+    "python": "3.11.9",
+    "torch_version": "2.10.0",
+    "vllm_version": "0.19.1"
+  },
+  "n_failed": 4,
+  "n_kept": 2,
+  "n_trials": 8,
+  "pareto_size": 1,
+  "phase_counts": {
+    "surrogate": 2,
+    "warmstart": 6
+  },
+  "run_id": "b8942c02cf67",
+  "top_by_tokens_per_sec": {
+    "config": {
+      "dtype": "bfloat16",
+      "enforce_eager": false,
+      "gpu_count": 2,
+      "gpu_memory_utilization": 0.88,
+      "gpu_type": "A100"
+    },
+    "kl_divergence": 3.893124810046988,
+    "tokens_per_sec": 682.0434279309864,
+    "tpot_p99_ms": 89.9030537200239,
+    "trial_id": "l2_topology_w0000",
+    "ttft_p99_ms": 12520.237293430077
+  }
+}

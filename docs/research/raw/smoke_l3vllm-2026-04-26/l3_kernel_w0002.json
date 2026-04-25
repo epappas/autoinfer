@@ -1,0 +1,21 @@
+{
+  "config": {
+    "dtype": "float32",
+    "entry_fn": "rope_optimized_kernel",
+    "shape_regime": "small",
+    "source": "import torch\n\ndef rope_optimized_kernel(q, cos, sin):\n    # Reshape for vectorized operations\n    q_reshaped = q.view(*q.shape[:-1], -1, 2)\n    cos_reshaped = cos.view(*cos.shape[:-1], -1, 1)\n    sin_reshaped = sin.view(*sin.shape[:-1], -1, 1)\n    \n    # Extract even and odd components\n    q_even = q_reshaped[..., 0]\n    q_odd = q_reshaped[..., 1]\n    \n    # Apply rotation\n    cos_val = cos_reshaped[..., 0]\n    sin_val = sin_reshaped[..., 0]\n    \n    rotated_even = q_even * cos_val - q_odd * sin_val\n    rotated_odd = q_even * sin_val + q_odd * cos_val\n    \n    # Reconstruct output\n    out = torch.stack([rotated_even, rotated_odd], dim=-1)\n    return out.view_as(q)",
+    "target_op": "rope"
+  },
+  "failure": {
+    "kind": "startup",
+    "layer": "l3_kernel",
+    "message": "target_op 'rope' not supported by vLLM injector (supported: ['rmsnorm', 'silu_mul'])",
+    "metadata": {},
+    "trial_id": "l3_kernel_w0002"
+  },
+  "layer": "l3_kernel",
+  "measurement": null,
+  "pareto_eligible": true,
+  "stale": false,
+  "trial_id": "l3_kernel_w0002"
+}

@@ -1,0 +1,21 @@
+{
+  "config": {
+    "dtype": "bfloat16",
+    "entry_fn": "rmsnorm_triton_kernel",
+    "shape_regime": "large",
+    "source": "import torch\ntry:\n    import triton\n    import triton.language as tl\n    \n    @triton.jit\n    def _rmsnorm_kernel(\n        x_ptr, w_ptr, out_ptr,\n        n_elements, eps,\n        BLOCK_SIZE: tl.constexpr,\n    ):\n        pid = tl.program_id(0)\n        block_start = pid * BLOCK_SIZE\n        offsets = block_start + tl.arange(0, BLOCK_SIZE)\n        mask = offsets < n_elements\n        \n        x = tl.load(x_ptr + offsets, mask=mask).to(tl.float32)\n        w = tl.load(w_ptr + offsets, mask=mask).to(tl.float32)\n        \n        x_squared = x * x\n        mean_x_squared = tl.sum(x_squared, axis=0) / n_elements\n        rms = tl.rsqrt(mean_x_squared + eps)\n        \n        out = x * rms * w\n        tl.store(out_ptr + offsets, out.to(x_ptr.dtype.element_ty), mask=mask)\n    \n    def rmsnorm_triton_kernel(x, w, eps):\n        orig_shape = x.shape\n        x_flat = x.view(-1, x.shape[-1])\n        batch_size, n_elements = x_flat.shape\n        \n        out = torch.empty_like(x_flat)\n        \n        BLOCK_SIZE = triton.next_power_of_2(n_elements)\n        grid = (batch_size,)\n        \n        for i in range(batch_size):\n            _rmsnorm_kernel[grid](\n                x_flat[i], w, out[i],\n                n_elements, eps,\n                BLOCK_SIZE=BLOCK_SIZE,\n            )\n        \n        return out.view(orig_shape)\n\nexcept ImportError:\n    def rmsnorm_triton_kernel(x, w, eps):\n        orig = x.dtype\n        xf = x.to(torch.float32)\n        rms = torch.rsqrt(xf.pow(2).mean(dim=-1, keepdim=True) + eps)\n        return (xf * rms * w.to(torch.float32)).to(orig)",
+    "target_op": "rmsnorm"
+  },
+  "failure": {
+    "kind": "startup",
+    "layer": "l3_kernel",
+    "message": "correctness raised: Pointer argument (at 0) cannot be accessed from Triton (cpu tensor?)",
+    "metadata": {},
+    "trial_id": "l3_kernel_w0000"
+  },
+  "layer": "l3_kernel",
+  "measurement": null,
+  "pareto_eligible": true,
+  "stale": false,
+  "trial_id": "l3_kernel_w0000"
+}

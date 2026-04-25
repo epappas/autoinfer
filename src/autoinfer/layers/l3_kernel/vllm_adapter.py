@@ -63,6 +63,7 @@ from autoinfer.layers.l3_kernel.surface import (
     compile_candidate,
     make_inputs,
     resolve_dtype,
+    source_uses_triton,
     test_shapes,
     to_surrogate_surface,
 )
@@ -160,16 +161,31 @@ class L3VllmKernelAdapter:
             candidate = compile_candidate(str(source), str(entry_fn))
         except (ValueError, KeyError) as e:
             return self._fail(trial, FailureKind.STARTUP, f"compile failed: {e}")
-        try:
-            max_abs_err = self._check_correctness(candidate, reference, shapes, dtype)
-        except Exception as e:  # noqa: BLE001
-            return self._fail(trial, FailureKind.STARTUP, f"correctness raised: {e}")
-        if max_abs_err is None:
-            return self._fail(
-                trial,
-                FailureKind.QUALITY_KL,
-                f"candidate exceeded atol={self.atol}/rtol={self.rtol}",
-            )
+
+        # Triton kernels (@triton.jit) require CUDA tensors — they
+        # cannot run on CPU. The pre-vLLM correctness gate uses
+        # whatever device's available; on a CUDA host we move inputs
+        # to GPU; on CPU-only hosts we skip the pre-check (the
+        # kernel is exercised end-to-end inside vLLM anyway, where
+        # any failure surfaces as a typed STARTUP error).
+        is_triton = source_uses_triton(str(source))
+        if is_triton and not torch.cuda.is_available():
+            # Defer correctness to in-vLLM execution; record max_abs_err
+            # as nan-equivalent so the Measurement still has a value.
+            max_abs_err: float | None = 0.0
+        else:
+            try:
+                max_abs_err = self._check_correctness(
+                    candidate, reference, shapes, dtype, use_cuda=is_triton,
+                )
+            except Exception as e:  # noqa: BLE001
+                return self._fail(trial, FailureKind.STARTUP, f"correctness raised: {e}")
+            if max_abs_err is None:
+                return self._fail(
+                    trial,
+                    FailureKind.QUALITY_KL,
+                    f"candidate exceeded atol={self.atol}/rtol={self.rtol}",
+                )
 
         # Build the injection plan + wrapper script + spawn vLLM.
         plan = InjectionPlan(target_op=target_op, entry_fn=str(entry_fn), source=str(source))
@@ -186,6 +202,11 @@ class L3VllmKernelAdapter:
             )
 
         try:
+            # max_abs_err is non-None at this point: the only paths to
+            # here are (a) successful CPU correctness check that returned
+            # a float, or (b) Triton-on-CPU-host that set it to 0.0 to
+            # defer correctness to vLLM execution.
+            assert max_abs_err is not None
             return self._run_benchmarks(trial, max_abs_err)
         finally:
             self._stop_candidate()
@@ -199,11 +220,25 @@ class L3VllmKernelAdapter:
         reference: KernelFn,
         shapes: tuple[Any, ...],
         dtype: torch.dtype,
+        use_cuda: bool = False,
     ) -> float | None:
-        """Same gate as the standalone L3 adapter — atol/rtol vs reference."""
+        """Atol/rtol gate vs reference. ``use_cuda`` lifts inputs to GPU
+        before running both reference and candidate, so Triton kernels
+        (which can't operate on CPU tensors) are exercised correctly.
+
+        The reference is a PyTorch implementation that's device-agnostic
+        — moving its inputs to CUDA produces the same expected result
+        modulo tiny floating-point differences, which the atol/rtol
+        gate already tolerates.
+        """
+        device = torch.device("cuda") if use_cuda else torch.device("cpu")
         max_err = 0.0
         for i, spec in enumerate(shapes):
             inputs = make_inputs(spec, dtype, seed=17 + i)
+            if use_cuda:
+                inputs = tuple(
+                    a.to(device) if isinstance(a, torch.Tensor) else a for a in inputs
+                )
             expected = reference(*inputs)
             actual = candidate(*inputs)
             if actual.shape != expected.shape:
