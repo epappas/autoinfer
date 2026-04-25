@@ -126,6 +126,28 @@ def _print_plan(spec: CampaignSpec, kwargs: dict[str, Any]) -> None:
     print(f"... ({len(kwargs['source'].splitlines())} total lines)")
 
 
+def _dedup_key(line: str) -> str:
+    """Stable dedup key for a log line.
+
+    Basilica's ``deployment.logs()`` returns each line wrapped as
+    ``data: {"message": "...", "stream": "...", "timestamp": "..."}``
+    where the timestamp is the orchestrator-side INGESTION time, not the
+    container's print time. That timestamp ticks forward on every fetch,
+    so a naive ``line.strip()`` key treats every re-served line as new.
+    Strip the wrapper before deduping so we key on actual content.
+    """
+    s = line.strip()
+    if s.startswith("data: ") and '"message":' in s:
+        try:
+            payload = json.loads(s[len("data: "):])
+            msg = payload.get("message", "")
+            stream = payload.get("stream", "")
+            return f"{stream}|{msg}"
+        except (json.JSONDecodeError, AttributeError):
+            pass
+    return s
+
+
 def _stream_logs(
     deployment: Deployment,
     log_file: Path | None,
@@ -146,10 +168,12 @@ def _stream_logs(
                 time.sleep(LOG_POLL_S)
                 continue
             for line in chunk.splitlines():
-                digest = line.strip()
-                if not digest or digest in seen:
+                if not line.strip():
                     continue
-                seen.add(digest)
+                key = _dedup_key(line)
+                if key in seen:
+                    continue
+                seen.add(key)
                 print(line)
                 if fh:
                     fh.write(line + "\n")

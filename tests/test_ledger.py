@@ -91,6 +91,30 @@ def test_unknown_layer_rejected(tmp_path: Path) -> None:
         ledger.mark_stale("l42_warp_drive")
 
 
+def test_mark_stale_re_persists_to_disk(tmp_path: Path) -> None:
+    """Regression: in-memory stale flag must reach disk so analysis
+    tools loading from JSON see the same state as ``Ledger.entries()``."""
+    import json
+
+    ledger = Ledger(tmp_path, pareto_axes=("tokens_per_sec",))
+    ledger.record(_entry("a_l1", "l1_engine", _m(1000.0, 25.0)))
+    ledger.record(_entry("b_l2", "l2_topology", _m(1200.0, 30.0)))
+
+    # Before staleness: l1 entry is fresh on disk
+    payload_before = json.loads((tmp_path / "a_l1.json").read_text())
+    assert payload_before["stale"] is False
+
+    ledger.mark_stale("l2_topology")
+
+    # After: l1 entry must show stale=True on disk too
+    payload_after = json.loads((tmp_path / "a_l1.json").read_text())
+    assert payload_after["stale"] is True
+
+    # l2 entry untouched (its layer is not above the invalidator)
+    payload_l2 = json.loads((tmp_path / "b_l2.json").read_text())
+    assert payload_l2["stale"] is False
+
+
 def test_entries_persisted_to_disk(tmp_path: Path) -> None:
     ledger = Ledger(tmp_path, pareto_axes=("tokens_per_sec",))
     ledger.record(_entry("t1", "l1_engine", _m(1000.0, 25.0)))

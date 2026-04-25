@@ -96,7 +96,10 @@ class Ledger:
     def mark_stale(self, invalidating_layer: str) -> int:
         """Flag every non-stale entry at a layer *above* the invalidator.
 
-        Returns the count of entries newly marked stale.
+        Returns the count of entries newly marked stale. Re-persists each
+        flagged entry so the on-disk JSON stays in sync with the
+        in-memory ledger (analysis tools that load from disk should see
+        the same state as ``Ledger.entries()``).
         """
         if invalidating_layer not in _LAYER_ORDER:
             raise ValueError(f"unknown layer: {invalidating_layer}")
@@ -109,6 +112,7 @@ class Ledger:
             if eo is None or eo >= i:
                 continue
             e.stale = True
+            self._persist(e)
             n += 1
         return n
 

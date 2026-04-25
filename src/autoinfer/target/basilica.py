@@ -59,14 +59,15 @@ class H(http.server.BaseHTTPRequestHandler):
             target = (runs / rel).resolve()
             if str(target).startswith(str(runs.resolve())) and target.is_file():
                 data = target.read_bytes()
-                ctype = "application/json" if target.suffix == ".json" else "application/octet-stream"
+                ctype = "application/json" if target.suffix == ".json" else "text/plain"
                 self._r(200, data, ctype)
                 return
         items = []
         if runs.exists():
-            for p in sorted(runs.rglob("*.json")):
-                r = p.relative_to(runs).as_posix()
-                items.append('<li><a href="' + r + '">' + r + "</a></li>")
+            for p in sorted(runs.rglob("*")):
+                if p.is_file() and p.suffix in (".json", ".jsonl", ".tsv", ".log"):
+                    r = p.relative_to(runs).as_posix()
+                    items.append('<li><a href="' + r + '">' + r + "</a></li>")
         body = (
             "<html><body>stage=" + str(STATE.get("stage")) + " err=" + str(STATE.get("error"))
             + "<ul>" + "".join(items) + "</ul></body></html>"
