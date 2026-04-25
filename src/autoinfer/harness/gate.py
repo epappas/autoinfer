@@ -177,19 +177,35 @@ def _concurrent_first(
         return futures[0].result()
 
 
+_SELF_KL_NOISE_FLOOR = 1.0
+"""Sensible upper bound (nats) for per-prompt KL between two clean greedy
+generations. Self-KL of reference-vs-reference under temperature=0 with
+batch-composition noise typically peaks at this scale; the median can
+be much smaller (~0.01-0.05). The cap below uses this as a floor so
+``5*median`` can't shrink the gate ceiling below the realistic noise
+envelope when median collapses to near-zero on a clean reference."""
+
+
 def _aggregate_self_kl(per: list[float]) -> dict[str, float]:
     """Aggregate sorted per-prompt self-KL into a calibration summary.
 
-    Pure: no I/O. Caller supplies the sorted list. The exposed ``p95``
-    is median-capped at 5x median to keep one outlier prompt from
-    blowing the gate ceiling open (see ``calibrate_self_kl``).
+    Pure: no I/O. Caller supplies the sorted list.
+
+    The exposed ``p95`` is capped at ``max(5*median, NOISE_FLOOR)`` to
+    bound single-outlier blowup without shrinking the ceiling below a
+    realistic noise envelope. With median=0.02 and one outlier at 19,
+    raw_p95=19 but cap=max(0.1, 1.0)=1.0 → p95=1.0 (vs the 0.1 the
+    earlier band-aid produced, which made the gate too strict). With
+    well-behaved data median=0.5 and raw_p95=0.6, cap=2.5, p95=0.6
+    (unchanged).
     """
     if not per:
         raise ValueError("per must be non-empty")
     n = len(per)
     raw_p95 = per[int(n * 0.95)] if n >= 20 else per[-1]
     median = per[n // 2]
-    p95 = min(raw_p95, 5.0 * median) if median > 0.0 else raw_p95
+    cap = max(5.0 * median, _SELF_KL_NOISE_FLOOR)
+    p95 = min(raw_p95, cap)
     return {
         "n": float(n),
         "mean": sum(per) / n,
