@@ -81,7 +81,10 @@ if [[ "$YES" != "yes" ]]; then
 fi
 
 echo "=== launching ==="
-exec uv run python scripts/orchestrate_iteration_zero.py \
+# PYTHONUNBUFFERED so progress lands in stdout/log files in real time
+# rather than waiting for Python's 4KB stdout buffer to fill.
+export PYTHONUNBUFFERED=1
+exec uv run python -u scripts/orchestrate_iteration_zero.py \
     --config "$CONFIG" \
     --name "autoinfer-l1l2-joint-$(date +%s)" \
     --artifacts-dir "$ARTIFACTS_DIR" \
