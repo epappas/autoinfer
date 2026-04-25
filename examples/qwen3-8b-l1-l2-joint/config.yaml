@@ -99,6 +99,11 @@ layers:
     # L1 trials run fast on the campaign container's local GPU
     # (~2-3 min each). Budget the larger share for L1.
     max_trials: 14
+    # When L2 finds a dominating config (likely H100), grant L1 up to
+    # 4 reserve trials so it can re-explore engine knobs against the
+    # new context. Validates the strong thesis claim: cross-layer
+    # stale enables a measurable second-pass Pareto improvement.
+    reserve_cap: 4
     candidate_port: 8000
     startup_timeout_s: 600
   l2_topology:

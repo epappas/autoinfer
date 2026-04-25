@@ -151,3 +151,97 @@ def test_has_budget(tmp_path: Path) -> None:
     sch.notify_trial_done("l1_engine")
     sch.notify_trial_done("l1_engine")
     assert sch.has_budget("l1_engine") is False
+
+
+def _build_spec_with_reserve(layer: str, max_trials: int, reserve_cap: int) -> LayerSpec:
+    spec = _build_spec(layer, max_trials=max_trials)
+    spec.reserve_cap = reserve_cap
+    return spec
+
+
+def test_propagate_grants_reserve_budget(tmp_path: Path) -> None:
+    """When deeper layer dominates, shallower layer's stale entries
+    earn re-search budget bounded by reserve_cap."""
+    ledger = Ledger(tmp_path, pareto_axes=("tokens_per_sec",))
+    ledger.record(Entry("a_l1", "l1_engine", {"x": 1.0}, _score({"x": 1.0}), None))
+    ledger.record(Entry("b_l1", "l1_engine", {"x": 2.0}, _score({"x": 2.0}), None))
+    ledger.record(Entry("c_l3", "l3_kernel", {"x": 3.0}, _score({"x": 3.0}), None))
+    sch = LayerScheduler(
+        {
+            "l1_engine": _build_spec_with_reserve("l1_engine", max_trials=2, reserve_cap=4),
+            "l3_kernel": _build_spec_with_reserve("l3_kernel", max_trials=5, reserve_cap=0),
+        }
+    )
+    sch.notify_trial_done("l1_engine")
+    sch.notify_trial_done("l1_engine")
+    sch.notify_trial_done("l3_kernel")
+    # L1 base budget exhausted; no reserve yet
+    assert sch.has_budget("l1_engine") is False
+
+    n = sch.propagate_finding("l3_kernel", ledger)
+    assert n == 2  # 2 L1 entries marked stale
+
+    # L1 now has reserve budget == min(stale_count=2, reserve_cap=4)
+    assert sch.reserve("l1_engine") == 2
+    assert sch.has_budget("l1_engine") is True
+
+
+def test_propagate_caps_reserve_at_layer_max(tmp_path: Path) -> None:
+    """If 100 L1 entries get stale, reserve must be capped at reserve_cap."""
+    ledger = Ledger(tmp_path, pareto_axes=("tokens_per_sec",))
+    for i in range(100):
+        ledger.record(
+            Entry(f"l1_{i}", "l1_engine", {"x": float(i)}, _score({"x": float(i)}), None)
+        )
+    ledger.record(Entry("l3", "l3_kernel", {"x": 1.0}, _score({"x": 1.0}), None))
+    sch = LayerScheduler(
+        {
+            "l1_engine": _build_spec_with_reserve("l1_engine", max_trials=200, reserve_cap=4),
+            "l3_kernel": _build_spec_with_reserve("l3_kernel", max_trials=10, reserve_cap=0),
+        }
+    )
+    n = sch.propagate_finding("l3_kernel", ledger)
+    assert n == 100
+    assert sch.reserve("l1_engine") == 4  # capped
+
+
+def test_reserve_burned_before_base_budget_after_exhaustion(tmp_path: Path) -> None:
+    """notify_trial_done burns reserve only after base budget is gone."""
+    del tmp_path  # this test is purely about scheduler state, no ledger
+    sch = LayerScheduler(
+        {
+            "l1_engine": _build_spec_with_reserve("l1_engine", max_trials=2, reserve_cap=3),
+            "l3_kernel": _build_spec_with_reserve("l3_kernel", max_trials=1, reserve_cap=0),
+        }
+    )
+    # Base budget consumed
+    sch.notify_trial_done("l1_engine")
+    sch.notify_trial_done("l1_engine")
+    assert sch.done("l1_engine") == 2
+    # Manually inject reserve as if propagate_finding fired
+    sch._reserve["l1_engine"] = 2  # noqa: SLF001
+    # Now notify burns reserve, not base
+    sch.notify_trial_done("l1_engine")
+    assert sch.done("l1_engine") == 2  # unchanged
+    assert sch.reserve("l1_engine") == 1
+    sch.notify_trial_done("l1_engine")
+    assert sch.reserve("l1_engine") == 0
+    assert sch.has_budget("l1_engine") is False
+
+
+def test_propagate_no_reserve_when_cap_zero(tmp_path: Path) -> None:
+    """Default behavior (reserve_cap=0) preserves single-pass invariant."""
+    ledger = Ledger(tmp_path, pareto_axes=("tokens_per_sec",))
+    ledger.record(Entry("a_l1", "l1_engine", {"x": 1.0}, _score({"x": 1.0}), None))
+    ledger.record(Entry("c_l3", "l3_kernel", {"x": 3.0}, _score({"x": 3.0}), None))
+    sch = LayerScheduler(
+        {
+            "l1_engine": _build_spec("l1_engine", max_trials=1),  # default reserve_cap=0
+            "l3_kernel": _build_spec("l3_kernel", max_trials=1),
+        }
+    )
+    sch.notify_trial_done("l1_engine")
+    sch.notify_trial_done("l3_kernel")
+    sch.propagate_finding("l3_kernel", ledger)
+    assert sch.reserve("l1_engine") == 0
+    assert sch.has_budget("l1_engine") is False  # no reserve granted

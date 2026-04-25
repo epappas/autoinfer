@@ -146,11 +146,13 @@ def _build_l1_spec(
         max_trials=max_trials,
         warmstart_n=cfg.policy.warmstart.n_configs,
         warmstart_prior=cfg.policy.warmstart.hardware_notes or "",
+        reserve_cap=l1_cfg.reserve_cap,
     )
     event = {
         "layer": "l1_engine",
         "model": l1_cfg.model,
         "max_trials": max_trials,
+        "reserve_cap": l1_cfg.reserve_cap,
         "max_kl_configured": cfg.harness.gate.max_kl,
         "max_kl_effective": effective_max_kl,
         "self_kl_calibrated": cfg.harness.gate.calibrate_self_kl,
@@ -216,11 +218,13 @@ def _build_l2_spec(
         max_trials=max_trials,
         warmstart_n=cfg.policy.warmstart.n_configs,
         warmstart_prior=cfg.policy.warmstart.hardware_notes or "",
+        reserve_cap=l2_cfg.reserve_cap,
     )
     event = {
         "layer": "l2_topology",
         "model": l2_cfg.model,
         "max_trials": max_trials,
+        "reserve_cap": l2_cfg.reserve_cap,
         "max_kl_configured": cfg.harness.gate.max_kl,
         "max_kl_effective": effective_max_kl,
         "self_kl_calibrated": cfg.harness.gate.calibrate_self_kl,
@@ -263,10 +267,12 @@ def _build_l3_spec(
         max_trials=max_trials,
         warmstart_n=min(cfg.policy.warmstart.n_configs, len(seeds)),
         warmstart_prior=cfg.policy.warmstart.hardware_notes or "",
+        reserve_cap=l3_cfg.reserve_cap,
     )
     event = {
         "layer": "l3_kernel",
         "max_trials": max_trials,
+        "reserve_cap": l3_cfg.reserve_cap,
         "atol": l3_cfg.atol,
         "rtol": l3_cfg.rtol,
     }

@@ -133,6 +133,34 @@ def test_violates_constraints_no_violations_on_defaults() -> None:
     assert violates_constraints(defs, catalog) == []
 
 
+def test_chunked_prefill_off_requires_full_max_model_len_batched_tokens() -> None:
+    """Regression: real campaign wasted 2 trials when surrogate proposed
+    enable_chunked_prefill=False with batched_tokens=8192, which vLLM
+    rejected at startup because Qwen3-8B's max_model_len is 32768."""
+    catalog = load_catalog(_REPO_CATALOG)
+    too_small = {
+        "enable_chunked_prefill": False,
+        "max_num_batched_tokens": 8192,
+    }
+    too_small_2 = {
+        "enable_chunked_prefill": False,
+        "max_num_batched_tokens": 16384,
+    }
+    enough = {
+        "enable_chunked_prefill": False,
+        "max_num_batched_tokens": 32768,
+    }
+    chunked_on = {
+        "enable_chunked_prefill": True,
+        "max_num_batched_tokens": 8192,
+    }
+    rule = "chunked_prefill_batched_tokens_bound"
+    assert rule in violates_constraints(too_small, catalog)
+    assert rule in violates_constraints(too_small_2, catalog)
+    assert rule not in violates_constraints(enough, catalog)
+    assert rule not in violates_constraints(chunked_on, catalog)
+
+
 def test_unknown_knob_type_rejected(tmp_path: Path) -> None:
     path = tmp_path / "bad.yaml"
     path.write_text("knobs:\n  x:\n    type: weird\n    default: 1\n")

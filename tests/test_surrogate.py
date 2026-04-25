@@ -81,6 +81,72 @@ def test_record_failure_does_not_crash() -> None:
     s.record(sugg.trial_id, None, FailureKind.OOM)
 
 
+def test_failure_recorded_as_complete_with_penalty_value() -> None:
+    """Regression: study.tell with state=FAIL is invisible to TPE's KDE,
+    producing 0% hit rate on infeasibility-dominated surfaces. Failures
+    must be recorded as COMPLETE with a penalty value."""
+    s = OptunaSurrogate(
+        kind="tpe",
+        seed=0,
+        surface=_surface(),
+        objective_axis="tokens_per_sec",
+        maximize=True,
+    )
+    sugg = s.suggest()
+    s.record(sugg.trial_id, None, FailureKind.STARTUP)
+    trials = s._study.get_trials(deepcopy=False)  # noqa: SLF001
+    last = trials[-1]
+    assert last.state.name == "COMPLETE", f"expected COMPLETE, got {last.state.name}"
+    assert last.value == 0.0  # _FAILURE_PENALTY for maximize
+
+
+def test_failure_penalty_minimize_uses_large_positive() -> None:
+    s = OptunaSurrogate(
+        kind="tpe",
+        seed=0,
+        surface=_surface(),
+        objective_axis="tpot_p99_ms",
+        maximize=False,
+    )
+    sugg = s.suggest()
+    s.record(sugg.trial_id, None, FailureKind.OOM)
+    trials = s._study.get_trials(deepcopy=False)  # noqa: SLF001
+    assert trials[-1].state.name == "COMPLETE"
+    assert trials[-1].value >= 1e8  # large positive = bad in minimize
+
+
+def test_tpe_avoids_failed_region_after_penalty_recording() -> None:
+    """End-to-end: when a region of the search space always fails, TPE
+    with penalty-encoded failures should learn to avoid it. Without this,
+    TPE's hit rate on infeasibility-dominated surfaces stays at 0%."""
+    surface = {"x": {"type": "float", "low": 0.0, "high": 10.0}}
+    s = OptunaSurrogate(
+        kind="tpe",
+        seed=0,
+        surface=surface,
+        objective_axis="tokens_per_sec",
+        maximize=True,
+    )
+    # x < 5 always fails; x >= 5 returns a peaked score around x=7.5
+    feasible_count_early = 0
+    feasible_count_late = 0
+    for i in range(60):
+        sugg = s.suggest()
+        x = float(sugg.config["x"])
+        if x < 5.0:
+            s.record(sugg.trial_id, None, FailureKind.STARTUP)
+        else:
+            score = 100.0 - (x - 7.5) ** 2
+            s.record(sugg.trial_id, _meas(score), None)
+            if i < 30:
+                feasible_count_early += 1
+            else:
+                feasible_count_late += 1
+    # Late half should have more feasible (x>=5) trials than early —
+    # TPE has learned to avoid x<5 from the penalty values
+    assert feasible_count_late > feasible_count_early
+
+
 def test_record_unknown_trial_raises() -> None:
     s = OptunaSurrogate(
         kind="tpe",

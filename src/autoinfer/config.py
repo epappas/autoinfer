@@ -120,6 +120,15 @@ class L1EngineConfig(_Base):
     model: str = "Qwen/Qwen3-8B"
     knobs_path: Path
     max_trials: int = Field(ge=1, default=200)
+    reserve_cap: int = Field(
+        ge=0,
+        default=0,
+        description=(
+            "Extra trials granted on cross-layer stale invalidation. "
+            "Default 0 preserves single-pass behavior; set >0 to enable "
+            "second-pass re-search after a deeper layer dominates."
+        ),
+    )
     candidate_port: int = Field(ge=1024, le=65535, default=8000)
     startup_timeout_s: int = Field(ge=30, default=600)
 
@@ -128,6 +137,7 @@ class L2TopologyConfig(_Base):
     model: str = "Qwen/Qwen3-8B"
     knobs_path: Path
     max_trials: int = Field(ge=1, default=20)
+    reserve_cap: int = Field(ge=0, default=0)
     memory: str = "64Gi"
     ttl_seconds: int = Field(ge=300, default=3600)
     deploy_timeout_s: int = Field(ge=60, default=1200)
@@ -136,6 +146,7 @@ class L2TopologyConfig(_Base):
 class L3KernelConfig(_Base):
     knobs_path: Path
     max_trials: int = Field(ge=1, default=6)
+    reserve_cap: int = Field(ge=0, default=0)
     atol: float = Field(gt=0.0, default=1e-3)
     rtol: float = Field(gt=0.0, default=1e-3)
     perf_repeats: int = Field(ge=1, default=5)

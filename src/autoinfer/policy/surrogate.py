@@ -4,6 +4,16 @@ Implements the bulk of the hybrid policy (P7) after the LLM warm-start.
 Per C6 evidence (arxiv 2603.24647), this surrogate is expected to
 dominate the search at ~100-500 evaluation budgets; the LLM operator
 only re-enters on stall.
+
+Failure handling (P9): a typed ``FailureRecord`` is converted to a
+penalty objective value (worst-possible for the configured direction)
+and reported via ``study.tell`` with ``state=COMPLETE`` rather than
+``state=FAIL``. Optuna's TPE excludes ``FAIL`` trials from its KDE,
+which produces 0% hit rates on surfaces where most configs are
+infeasible — see iteration-zero L1 50-trial run + 2026-04-25 joint run
+(both 0/8 surrogate hit rate). Penalty-encoded failures let the
+sampler learn to avoid the infeasible region by modelling it as
+"low value" instead of "missing data".
 """
 
 from __future__ import annotations
@@ -30,8 +40,21 @@ class Surrogate(Protocol):
     ) -> None: ...
 
 
+_FAILURE_PENALTY = 0.0
+"""Worst-possible objective value for a maximize direction; for
+minimize it's negated to a large positive value via
+``OptunaSurrogate._penalty_for_failure``. The exact magnitude doesn't
+matter for TPE — what matters is that it's strictly worse than any
+real observation the search could produce."""
+
+
 class OptunaSurrogate:
-    """Optuna-backed surrogate; supports ``tpe``, ``cmaes``, ``random``."""
+    """Optuna-backed surrogate; supports ``tpe``, ``cmaes``, ``random``.
+
+    Failures land as ``state=COMPLETE`` with a penalty value rather than
+    ``state=FAIL`` so the sampler models the infeasible region instead
+    of ignoring it. See module docstring.
+    """
 
     def __init__(
         self,
@@ -59,6 +82,7 @@ class OptunaSurrogate:
         )
         self._surface = surface
         self._axis = objective_axis
+        self._maximize = maximize
         self._pending: dict[str, Any] = {}
 
     def suggest(self) -> Suggestion:
@@ -78,11 +102,24 @@ class OptunaSurrogate:
         if trial is None:
             raise KeyError(f"no pending trial {trial_id!r}")
         if failure is not None:
-            self._study.tell(trial, state=self._optuna.trial.TrialState.FAIL)
+            # Penalty-encode the failure as state=COMPLETE so the sampler's
+            # KDE includes it (see module docstring for rationale).
+            self._study.tell(trial, self._penalty_for_failure(failure))
             return
         if measurement is None:
             raise ValueError("measurement required when failure is None")
         self._study.tell(trial, measurement.value(self._axis))
+
+    def _penalty_for_failure(self, failure: FailureKind) -> float:
+        """Worst-possible objective value for the configured direction.
+
+        ``failure`` kind is ignored today (every typed failure earns the
+        same penalty). A future extension could differentiate hard
+        failures (STARTUP/HANG/OOM) from soft (QUALITY_KL) so quality
+        regressions don't earn the same penalty as structural infeasibility.
+        """
+        del failure
+        return _FAILURE_PENALTY if self._maximize else 1e9
 
     @staticmethod
     def _sample(trial: Any, name: str, spec: dict[str, Any]) -> Any:

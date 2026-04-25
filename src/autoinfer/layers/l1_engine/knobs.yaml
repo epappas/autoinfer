@@ -21,7 +21,7 @@
 knobs:
   max_num_batched_tokens:
     type: categorical
-    values: [1024, 2048, 4096, 8192, 16384]
+    values: [1024, 2048, 4096, 6144, 8192, 16384, 32768]
     default: 2048
     vllm_cli: --max-num-batched-tokens
     coupled_with: [max_num_seqs, enable_chunked_prefill]
@@ -122,11 +122,15 @@ constraints:
     requires_values: [FLASHINFER, FLASH_ATTN]
 
   - rule: chunked_prefill_batched_tokens_bound
-    description: When chunked prefill is disabled, max_num_batched_tokens must accommodate the longest prompt.
+    description: When chunked prefill is disabled, max_num_batched_tokens must
+      accommodate the longest prompt. For Qwen3-8B (max_model_len=32768) the only
+      valid value is 32768; smaller values cause vLLM to reject the longest prompts
+      at startup with a Pydantic value_error. Models with shorter context can
+      relax this in their own catalog.
     when_knob: enable_chunked_prefill
     when_values: [false]
     requires_knob: max_num_batched_tokens
-    requires_values: [8192, 16384]
+    requires_values: [32768]
 
   - rule: quantization_none_means_literal_none
     description: quantization value 'none' passes no --quantization flag.

@@ -31,6 +31,16 @@ class LayerSpec:
     max_trials: int
     warmstart_n: int = 10
     warmstart_prior: str = ""
+    reserve_cap: int = 0
+    """Max additional trials granted on cross-layer stale invalidation.
+
+    When ``propagate_finding`` marks N entries stale at this layer, the
+    scheduler grants ``min(N, reserve_cap)`` reserve trials so the
+    layer can re-search on the new dominating context. Default 0
+    preserves the iteration-zero behavior (single-pass; stale entries
+    never re-explored). The 2026-04-25 joint run validated stale-signal
+    fires correctly; reserve_cap > 0 unlocks the second-pass demonstration.
+    """
 
 
 class LayerScheduler:
@@ -41,6 +51,7 @@ class LayerScheduler:
             raise ValueError("at least one layer spec required")
         self._specs = dict(specs)
         self._done: dict[str, int] = dict.fromkeys(self._specs, 0)
+        self._reserve: dict[str, int] = dict.fromkeys(self._specs, 0)
         self._warmstart_done: dict[str, bool] = dict.fromkeys(self._specs, False)
 
     @property
@@ -56,13 +67,25 @@ class LayerScheduler:
     def notify_trial_done(self, layer: str) -> None:
         if layer not in self._done:
             raise ValueError(f"unknown layer: {layer!r}")
-        self._done[layer] += 1
+        # Burn reserve before base budget — reserve trials exist to
+        # re-explore after a stale invalidation, so consume them first
+        # while the layer still has unflagged budget left.
+        if self._done[layer] >= self._specs[layer].max_trials and self._reserve[layer] > 0:
+            self._reserve[layer] -= 1
+        else:
+            self._done[layer] += 1
 
     def done(self, layer: str) -> int:
         return self._done[layer]
 
+    def reserve(self, layer: str) -> int:
+        return self._reserve[layer]
+
     def has_budget(self, layer: str) -> bool:
-        return self._done[layer] < self._specs[layer].max_trials
+        return (
+            self._done[layer] < self._specs[layer].max_trials
+            or self._reserve[layer] > 0
+        )
 
     def pick_layer(self, ledger: Ledger) -> str | None:
         """Return the next layer to run.
@@ -80,14 +103,33 @@ class LayerScheduler:
         return None
 
     def propagate_finding(self, finding_layer: str, ledger: Ledger) -> int:
-        """On a new finding at ``finding_layer``, invalidate layers above.
+        """On a new finding at ``finding_layer``, invalidate layers above
+        and grant reserve budget so they can re-search on the new context.
 
         Delegates to ``Ledger.mark_stale``. Returns the number of entries
         newly flagged stale.
+
+        Per-layer reserve grant is ``min(stale_invalidated_at_that_layer,
+        spec.reserve_cap)`` — the cap stops a single deep finding from
+        granting unbounded re-search on shallower layers.
         """
         if finding_layer not in self._specs:
             raise ValueError(f"unknown layer: {finding_layer!r}")
-        return ledger.mark_stale(finding_layer)
+        invalidated_total = ledger.mark_stale(finding_layer)
+        if invalidated_total > 0:
+            for name, spec in self._specs.items():
+                if spec.reserve_cap <= 0 or name == finding_layer:
+                    continue
+                stale_here = sum(
+                    1 for e in ledger.entries() if e.layer == name and e.stale
+                )
+                grant = min(stale_here, spec.reserve_cap)
+                # Don't double-grant: cap reserve at the per-layer max.
+                # The runner's existing _step flow already routes reserve
+                # trials through operator/surrogate (warmstart_done was
+                # set true on the layer's first warmstart batch).
+                self._reserve[name] = min(self._reserve[name] + grant, spec.reserve_cap)
+        return invalidated_total
 
     @staticmethod
     def _count_stale(ledger: Ledger) -> dict[str, int]:
