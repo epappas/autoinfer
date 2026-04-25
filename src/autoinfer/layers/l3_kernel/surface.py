@@ -14,6 +14,7 @@ No subprocess, no GPU; pure CPU logic + PyTorch.
 
 from __future__ import annotations
 
+import re
 from collections.abc import Callable
 from dataclasses import dataclass
 from typing import Any
@@ -87,27 +88,86 @@ def make_inputs(
     raise ValueError(f"unknown target_op {spec.target_op!r}")
 
 
-def compile_candidate(source: str, entry_fn: str) -> KernelCallable:
-    """Exec ``source`` in a restricted namespace and return ``entry_fn``.
+_HAS_TRITON_JIT_RE = re.compile(r"@triton\.jit\b")
 
-    The namespace exposes ``torch`` and ``math`` only. Raises
-    ``ValueError`` on compile errors and ``KeyError`` if ``entry_fn``
-    is absent or not callable.
+
+def _module_imports_prefix() -> str:
+    """Stock import block prepended to LLM-proposed source.
+
+    The LLM is told the runtime provides ``torch``/``math``/``triton``/
+    ``tl``; making the imports literal at the top of the temp module
+    means we don't depend on the LLM remembering import lines (and the
+    delimited prompt format the proposer uses doesn't include them).
     """
-    import math
+    return (
+        "import math\n"
+        "import torch\n"
+        "try:\n"
+        "    import triton\n"
+        "    import triton.language as tl\n"
+        "except (ImportError, RuntimeError):\n"
+        "    triton = None\n"
+        "    tl = None\n"
+    )
 
+
+def compile_candidate(source: str, entry_fn: str) -> KernelCallable:
+    """Compile ``source`` into a Python module and return ``entry_fn``.
+
+    Triton-decorated source (``@triton.jit``) is materialised as a real
+    .py temp file before import because Triton 3.6 requires
+    ``inspect.getsource`` to find the function — pure ``exec()`` of a
+    source string can't satisfy that. Plain-Python source uses the
+    same path (cheap and uniform) so behavior matches across Triton
+    and non-Triton candidates.
+
+    Triton compilation is lazy: ``@triton.jit`` only registers the
+    kernel; the actual JIT runs on first launch with a CUDA device.
+    CPU-only runs of Triton kernels will fail at first call, which
+    the adapter classifies as a typed STARTUP failure.
+
+    Raises ``ValueError`` on syntax errors, ``KeyError`` if
+    ``entry_fn`` is absent or not callable.
+    """
+    import importlib.util
+    import tempfile
+    import uuid
+
+    full_source = _module_imports_prefix() + "\n" + source
     try:
-        code = compile(source, "<l3_candidate>", "exec")
+        compile(full_source, "<l3_candidate_check>", "exec")
     except SyntaxError as e:
         raise ValueError(f"candidate source has syntax error: {e}") from e
-    ns: dict[str, Any] = {"torch": torch, "math": math}
-    exec(code, ns)  # noqa: S102 - candidate execution is the whole point
-    if entry_fn not in ns:
+
+    # Write to a temp .py file; never auto-delete because the JITed
+    # kernel may inspect its source on first launch (long after this
+    # function returns). Cleanup is deferred to OS temp reaping.
+    suffix = f"_l3_{uuid.uuid4().hex[:8]}.py"
+    with tempfile.NamedTemporaryFile(
+        mode="w", suffix=suffix, delete=False, encoding="utf-8",
+    ) as f:
+        f.write(full_source)
+        path = f.name
+
+    spec = importlib.util.spec_from_file_location(
+        f"l3_candidate_{uuid.uuid4().hex[:8]}", path,
+    )
+    if spec is None or spec.loader is None:
+        raise ValueError(f"failed to build module spec for {path}")
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+
+    if not hasattr(module, entry_fn):
         raise KeyError(f"entry_fn {entry_fn!r} not defined in candidate source")
-    fn = ns[entry_fn]
+    fn = getattr(module, entry_fn)
     if not callable(fn):
         raise KeyError(f"entry_fn {entry_fn!r} is not callable")
     return fn  # type: ignore[no-any-return]
+
+
+def source_uses_triton(source: str) -> bool:
+    """Cheap detector: ``@triton.jit`` decorator present in source."""
+    return bool(_HAS_TRITON_JIT_RE.search(source))
 
 
 # Test-matrix shapes per (op, regime). Small keeps CPU tests fast; large

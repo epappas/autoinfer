@@ -97,14 +97,8 @@ class OpenAICompatibleProposalLLM:
     temperature: float = 0.3
     transport: httpx.BaseTransport | None = None
 
-    def propose_configs(
-        self,
-        surface: dict[str, dict[str, Any]],
-        n: int,
-        prior_notes: str,
-        history: list[dict[str, Any]],
-    ) -> list[dict[str, Any]]:
-        prompt = build_prompt(surface, n, prior_notes, history)
+    def complete(self, prompt: str) -> str:
+        """Single-prompt chat-completion call. Returns the model's text."""
         headers = {"Content-Type": "application/json"}
         if self.api_key:
             headers["Authorization"] = f"Bearer {self.api_key}"
@@ -125,7 +119,18 @@ class OpenAICompatibleProposalLLM:
             resp = client.post(url, headers=headers, json=body)
             resp.raise_for_status()
             payload = resp.json()
-        text = payload["choices"][0]["message"]["content"]
+        text: str = payload["choices"][0]["message"]["content"]
+        return text
+
+    def propose_configs(
+        self,
+        surface: dict[str, dict[str, Any]],
+        n: int,
+        prior_notes: str,
+        history: list[dict[str, Any]],
+    ) -> list[dict[str, Any]]:
+        prompt = build_prompt(surface, n, prior_notes, history)
+        text = self.complete(prompt)
         return parse_configs(text, surface, n)
 
 
@@ -152,6 +157,17 @@ class AnthropicProposalLLM:
             else anthropic.Anthropic()
         )
 
+    def complete(self, prompt: str) -> str:
+        resp = self._client.messages.create(
+            model=self.model,
+            max_tokens=self.max_tokens,
+            messages=[{"role": "user", "content": prompt}],
+        )
+        text: str = "".join(
+            block.text for block in resp.content if getattr(block, "text", None)
+        )
+        return text
+
     def propose_configs(
         self,
         surface: dict[str, dict[str, Any]],
@@ -160,12 +176,5 @@ class AnthropicProposalLLM:
         history: list[dict[str, Any]],
     ) -> list[dict[str, Any]]:
         prompt = build_prompt(surface, n, prior_notes, history)
-        resp = self._client.messages.create(
-            model=self.model,
-            max_tokens=self.max_tokens,
-            messages=[{"role": "user", "content": prompt}],
-        )
-        text = "".join(
-            block.text for block in resp.content if getattr(block, "text", None)
-        )
+        text = self.complete(prompt)
         return parse_configs(text, surface, n)

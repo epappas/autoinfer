@@ -8,6 +8,11 @@ from autoinfer.layers.l3_kernel.baselines import (
     rope_ref,
     silu_mul_ref,
 )
+from autoinfer.layers.l3_kernel.proposer import (
+    KernelProposer,
+    build_kernel_prompt,
+    parse_kernel_blocks,
+)
 from autoinfer.layers.l3_kernel.surface import (
     REFERENCE_SOURCES,
     KernelCallable,
@@ -17,6 +22,7 @@ from autoinfer.layers.l3_kernel.surface import (
     make_inputs,
     reference_seed_configs,
     resolve_dtype,
+    source_uses_triton,
     test_shapes,
     to_surrogate_surface,
 )
@@ -24,18 +30,22 @@ from autoinfer.layers.l3_kernel.surface import (
 __all__ = [
     "KernelCallable",
     "KernelFn",
+    "KernelProposer",
     "L3KernelAdapter",
     "REFERENCES",
     "REFERENCE_SOURCES",
     "ShapeSpec",
+    "build_kernel_prompt",
     "compile_candidate",
     "load_catalog",
     "make_inputs",
+    "parse_kernel_blocks",
     "reference_seed_configs",
     "resolve_dtype",
     "rmsnorm_ref",
     "rope_ref",
     "silu_mul_ref",
+    "source_uses_triton",
     "test_shapes",
     "to_surrogate_surface",
 ]

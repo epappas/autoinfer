@@ -237,6 +237,7 @@ def _build_l3_spec(
 ) -> tuple[str, LayerSpec, dict[str, Any]]:
     from autoinfer.layers.l3_kernel import L3KernelAdapter, reference_seed_configs
     from autoinfer.layers.l3_kernel import load_catalog as load_l3_catalog
+    from autoinfer.layers.l3_kernel.proposer import KernelProposer
 
     l3_cfg = cfg.layers.l3_kernel
     assert l3_cfg is not None
@@ -257,7 +258,15 @@ def _build_l3_spec(
         maximize=True,
     )
     seeds = reference_seed_configs()
-    warmstart = _build_warmstart_with_seeds(cfg.policy.warmstart, seeds)
+    warmstart: ProposalLLM
+    if cfg.policy.warmstart.provider == "deterministic":
+        warmstart = _build_warmstart_with_seeds(cfg.policy.warmstart, seeds)
+    else:
+        # LLM-driven kernel proposer: wraps the underlying chat-completion
+        # client (which exposes .complete(prompt)) so L3 candidates are
+        # actual source-code proposals, not surrogate-knob picks.
+        raw_llm = _build_warmstart_with_seeds(cfg.policy.warmstart, seeds)
+        warmstart = KernelProposer(llm=raw_llm)  # type: ignore[arg-type]
 
     max_trials = max_trials_override if max_trials_override is not None else l3_cfg.max_trials
     spec = LayerSpec(
