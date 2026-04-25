@@ -1,0 +1,26 @@
+{
+  "config": {
+    "dtype": "bfloat16",
+    "enforce_eager": false,
+    "gpu_count": 1,
+    "gpu_memory_utilization": 0.9156395312601235,
+    "gpu_type": "A100"
+  },
+  "failure": null,
+  "layer": "l2_topology",
+  "measurement": {
+    "extra": {
+      "goodput": 3.5328163138306365,
+      "max_kl": 13.326581023517862,
+      "tpot_p50_ms": 14.808520245041061,
+      "ttft_p50_ms": 7870.000849477947
+    },
+    "kl_divergence": 2.430147176302134,
+    "peak_hbm_gb": 0.0,
+    "tokens_per_sec": 749.4538608262274,
+    "tpot_p99_ms": 114.36364360087147,
+    "ttft_p99_ms": 8166.081899944693
+  },
+  "stale": false,
+  "trial_id": "l2_topology_s0005"
+}
