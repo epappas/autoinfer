@@ -158,6 +158,7 @@ class ContinuousRunner:
             config=cfg,
             measurement=out.measurement,
             failure=out.failure,
+            pareto_eligible=out.pareto_eligible,
         )
         self.ledger.record(entry)
         if surrogate_tid is not None:

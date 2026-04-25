@@ -26,6 +26,14 @@ class TrialInput:
 class TrialOutput:
     measurement: Measurement | None
     failure: FailureRecord | None
+    pareto_eligible: bool = True
+    """Forwarded onto ``Entry.pareto_eligible`` — see Ledger.Entry docstring.
+
+    Adapters whose measurement axes don't unit-match the joint Pareto
+    axes (e.g. L3 kernel ops/sec vs L1/L2 token throughput) should set
+    this False so they're scored on a per-layer frontier only. Default
+    True preserves L1/L2 behavior.
+    """
 
     def __post_init__(self) -> None:
         if (self.measurement is None) == (self.failure is None):

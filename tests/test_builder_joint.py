@@ -152,16 +152,22 @@ def test_joint_runs_end_to_end_with_l3_only_adapter(tmp_path: Path) -> None:
     with max_trials=0... actually max_trials must be >=1 per config.
 
     Instead: build L3-only and confirm the runner completes trials, to
-    verify the refactor didn't break the single-layer runnable path."""
+    verify the refactor didn't break the single-layer runnable path.
+    L3 entries are pareto_eligible=False (kernel ops/sec aren't unit-
+    comparable to token throughput) so the joint frontier excludes
+    them; the per-layer frontier still includes the L3 best."""
     raw = _raw_joint(tmp_path)
     raw["layers"].pop("l1_engine")  # type: ignore[attr-defined]
     raw["layers"]["l3_kernel"]["max_trials"] = 3  # type: ignore[index]
     cfg = RunConfig.model_validate(raw)
     runner, ledger = build_runner(cfg)
-    front = runner.run()
+    runner.run()
     entries = ledger.entries()
     assert len(entries) == 3
     # L3 reference kernels pass correctness; at least one kept
     kept = [e for e in entries if e.kept]
     assert len(kept) >= 1
-    assert len(front) >= 1
+    # joint Pareto excludes L3 (ineligible); per-layer frontier sees it
+    by_layer = ledger.pareto_front_by_layer()
+    assert "l3_kernel" in by_layer
+    assert len(by_layer["l3_kernel"]) >= 1

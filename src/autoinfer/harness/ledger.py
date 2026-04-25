@@ -70,6 +70,23 @@ class Entry:
     measurement: Measurement | None
     failure: FailureRecord | None
     stale: bool = False
+    pareto_eligible: bool = True
+    """Whether this entry participates in the **joint** Pareto frontier.
+
+    Set to False for measurements that aren't unit-comparable to other
+    layers' measurements. L3 kernel ops/sec, for example, isn't directly
+    comparable to L1/L2 end-to-end token throughput — a 34K-ops/sec
+    RMSNorm kernel doesn't actually serve 34K tokens/sec; the kernel
+    contributes a small fraction to overall serving throughput, and
+    proper integration into vLLM's custom-op registry is required to
+    measure end-to-end. Until that integration ships, L3 entries flag
+    themselves ineligible to keep the joint frontier honest.
+
+    The flag does NOT affect cross-layer stale propagation — an L3
+    finding still triggers ``mark_stale`` for layers above it (L1, L2),
+    because conceptually the kernel improvement carries; only the
+    Pareto-axis comparison would be misleading.
+    """
 
     @property
     def kept(self) -> bool:
@@ -117,8 +134,29 @@ class Ledger:
         return n
 
     def pareto_front(self) -> list[Entry]:
-        kept = [e for e in self._entries if e.kept]
+        """Joint Pareto frontier across all eligible layers.
+
+        Excludes entries with ``pareto_eligible=False`` (e.g. L3 kernel
+        ops/sec which isn't unit-comparable to L1/L2 token throughput).
+        """
+        kept = [e for e in self._entries if e.kept and e.pareto_eligible]
         return [e for e in kept if not any(self._dominates(o, e) for o in kept if o is not e)]
+
+    def pareto_front_by_layer(self) -> dict[str, list[Entry]]:
+        """Per-layer Pareto frontier — every layer scored against itself.
+
+        Useful for honest within-layer comparison even when the joint
+        frontier excludes a layer (e.g. L3) for unit-mismatch reasons.
+        """
+        out: dict[str, list[Entry]] = {}
+        for entry in self._entries:
+            if not entry.kept:
+                continue
+            out.setdefault(entry.layer, []).append(entry)
+        return {
+            layer: [e for e in entries if not any(self._dominates(o, e) for o in entries if o is not e)]
+            for layer, entries in out.items()
+        }
 
     def _dominates(self, a: Entry, b: Entry) -> bool:
         assert a.measurement is not None and b.measurement is not None
@@ -141,5 +179,6 @@ class Ledger:
             "measurement": asdict(entry.measurement) if entry.measurement else None,
             "failure": entry.failure.to_dict() if entry.failure else None,
             "stale": entry.stale,
+            "pareto_eligible": entry.pareto_eligible,
         }
         path.write_text(json.dumps(payload, indent=2, sort_keys=True))

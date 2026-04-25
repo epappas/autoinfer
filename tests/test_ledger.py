@@ -91,6 +91,56 @@ def test_unknown_layer_rejected(tmp_path: Path) -> None:
         ledger.mark_stale("l42_warp_drive")
 
 
+def test_pareto_eligible_default_true(tmp_path: Path) -> None:
+    del tmp_path  # default-flag check is purely about Entry construction
+    e = _entry("a", "l1_engine", _m(100.0, 50.0))
+    assert e.pareto_eligible is True
+
+
+def test_pareto_front_excludes_ineligible_entries(tmp_path: Path) -> None:
+    """L3 ops/sec (34000) shouldn't trivially dominate L2 token throughput
+    (900) on the joint Pareto. Marking L3 entries pareto_eligible=False
+    keeps the joint frontier honest."""
+    ledger = Ledger(tmp_path, pareto_axes=("tokens_per_sec",))
+    ledger.record(_entry("l1", "l1_engine", _m(900.0, 50.0)))
+    l3 = _entry("l3", "l3_kernel", _m(34000.0, 0.0))
+    l3.pareto_eligible = False
+    ledger.record(l3)
+    front = ledger.pareto_front()
+    ids = {e.trial_id for e in front}
+    assert ids == {"l1"}  # L3 excluded from joint frontier
+
+
+def test_pareto_front_by_layer_groups_by_layer(tmp_path: Path) -> None:
+    """Per-layer frontier still surfaces the L3 best even though it's
+    excluded from the joint frontier."""
+    ledger = Ledger(tmp_path, pareto_axes=("tokens_per_sec",))
+    l3a = _entry("l3a", "l3_kernel", _m(100.0, 0.0))
+    l3a.pareto_eligible = False
+    l3b = _entry("l3b", "l3_kernel", _m(200.0, 0.0))
+    l3b.pareto_eligible = False
+    ledger.record(_entry("l1", "l1_engine", _m(900.0, 50.0)))
+    ledger.record(l3a)
+    ledger.record(l3b)
+    by_layer = ledger.pareto_front_by_layer()
+    assert {e.trial_id for e in by_layer["l1_engine"]} == {"l1"}
+    # L3 layer's best is l3b (200 > 100)
+    assert {e.trial_id for e in by_layer["l3_kernel"]} == {"l3b"}
+
+
+def test_pareto_eligible_persists_to_disk(tmp_path: Path) -> None:
+    """Disk JSON must include the eligibility flag so analysis tools
+    loading from disk see the same state as in-memory."""
+    import json
+
+    ledger = Ledger(tmp_path, pareto_axes=("tokens_per_sec",))
+    l3 = _entry("l3a", "l3_kernel", _m(100.0, 0.0))
+    l3.pareto_eligible = False
+    ledger.record(l3)
+    payload = json.loads((tmp_path / "l3a.json").read_text())
+    assert payload["pareto_eligible"] is False
+
+
 def test_mark_stale_re_persists_to_disk(tmp_path: Path) -> None:
     """Regression: in-memory stale flag must reach disk so analysis
     tools loading from JSON see the same state as ``Ledger.entries()``."""

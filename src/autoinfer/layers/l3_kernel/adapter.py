@@ -111,7 +111,11 @@ class L3KernelAdapter:
             kl_divergence=0.0,
             extra={"max_abs_err": max_abs_err, "n_shapes": float(len(shapes))},
         )
-        return TrialOutput(measurement=meas, failure=None)
+        # Kernel ops/sec is not unit-comparable to L1/L2 end-to-end token
+        # throughput. Mark ineligible for the joint Pareto until proper
+        # vLLM custom-op integration measures kernel wins as token
+        # throughput improvements; per-layer ranking still works.
+        return TrialOutput(measurement=meas, failure=None, pareto_eligible=False)
 
     def teardown(self) -> None:
         return None

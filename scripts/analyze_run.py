@@ -53,6 +53,7 @@ def load_trials(run_dir: Path) -> list[dict[str, Any]]:
         except Exception:
             continue
         if "trial_id" in d and "config" in d:
+            d.setdefault("pareto_eligible", True)
             out.append(d)
     return out
 
@@ -197,17 +198,28 @@ def main() -> int:
 
     kept = [t for t in trials if t.get("measurement") and not t.get("stale")]
     if kept:
-        front = pareto_front(kept)
-        print(f"PARETO FRONTIER ({len(front)} of {len(kept)} kept, joint across layers):")
+        eligible = [t for t in kept if t.get("pareto_eligible", True)]
+        ineligible = [t for t in kept if not t.get("pareto_eligible", True)]
+        front = pareto_front(eligible) if eligible else []
+        print(
+            f"JOINT PARETO FRONTIER ({len(front)} of {len(eligible)} eligible kept; "
+            f"{len(ineligible)} ineligible excluded):"
+        )
         for t in sorted(front, key=lambda x: -x["measurement"]["tokens_per_sec"]):
             print("  " + fmt_trial_row(t))
         print()
 
         _print_cross_layer(front)
 
-        top = max(kept, key=lambda t: t["measurement"]["tokens_per_sec"])
-        print("TOP BY TOKENS_PER_SEC:")
-        print("  " + fmt_trial_row(top))
+        # Per-layer best — surfaces L3 winners that the joint frontier
+        # excludes for unit-mismatch reasons.
+        layers_seen: dict[str, list[dict[str, Any]]] = {}
+        for t in kept:
+            layers_seen.setdefault(t.get("layer", "unknown"), []).append(t)
+        print("PER-LAYER BEST:")
+        for layer, ts in sorted(layers_seen.items()):
+            best = max(ts, key=lambda x: x["measurement"]["tokens_per_sec"])
+            print("  " + fmt_trial_row(best))
         print()
 
     print("ALL TRIALS (sorted by tok/s, kept first then stale, then fails):")
