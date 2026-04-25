@@ -65,7 +65,7 @@ class H(http.server.BaseHTTPRequestHandler):
         items = []
         if runs.exists():
             for p in sorted(runs.rglob("*")):
-                if p.is_file() and p.suffix in (".json", ".jsonl", ".tsv", ".log"):
+                if p.is_file() and p.suffix[1:] in {"json","jsonl","tsv","log","out","err"}:
                     r = p.relative_to(runs).as_posix()
                     items.append('<li><a href="' + r + '">' + r + "</a></li>")
         body = (

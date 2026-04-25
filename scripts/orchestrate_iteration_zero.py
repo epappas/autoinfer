@@ -198,7 +198,7 @@ def _fetch_artifacts(deployment: Deployment, out_dir: Path) -> None:
     # tolerant parser: pick hrefs ending in .json / .jsonl / .tsv / .log
     import re
 
-    pattern = re.compile(r'href="([^"]+\.(?:jsonl|json|tsv|log))"')
+    pattern = re.compile(r'href="([^"]+\.(?:jsonl|json|tsv|log|out|err))"')
     candidates = set(pattern.findall(html))
     print(f"[orchestrator] {len(candidates)} artifacts")
     for rel in sorted(candidates):

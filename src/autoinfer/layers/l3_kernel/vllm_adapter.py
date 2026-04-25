@@ -112,6 +112,9 @@ class L3VllmKernelAdapter:
 
     _process: subprocess.Popen[bytes] | None = field(default=None, init=False, repr=False)
     _wrapper_path: Path | None = field(default=None, init=False, repr=False)
+    _wrapper_stdout_path: Path | None = field(default=None, init=False, repr=False)
+    _wrapper_stderr_path: Path | None = field(default=None, init=False, repr=False)
+    _current_trial_id: str | None = field(default=None, init=False, repr=False)
 
     def surface(self) -> dict[str, Any]:
         return to_surrogate_surface(self.catalog)
@@ -170,11 +173,17 @@ class L3VllmKernelAdapter:
 
         # Build the injection plan + wrapper script + spawn vLLM.
         plan = InjectionPlan(target_op=target_op, entry_fn=str(entry_fn), source=str(source))
+        self._current_trial_id = trial.trial_id
         try:
             self._start_patched_vllm(plan)
         except Exception as e:  # noqa: BLE001
+            log_hint = self._log_hint(trial.trial_id)
             self._stop_candidate()
-            return self._fail(trial, FailureKind.STARTUP, f"vllm startup failed: {e}")
+            return self._fail(
+                trial,
+                FailureKind.STARTUP,
+                f"vllm startup failed: {e}{log_hint}",
+            )
 
         try:
             return self._run_benchmarks(trial, max_abs_err)
@@ -273,14 +282,25 @@ class L3VllmKernelAdapter:
         path = wrapper_dir / f"l3_wrapper_{uuid.uuid4().hex[:8]}.py"
         path.write_text(wrapper_src, encoding="utf-8")
         self._wrapper_path = path
+
+        # Stream wrapper subprocess stdout/stderr to per-trial files
+        # under result_dir so the FULL vLLM crash trace is recoverable
+        # even after the trial JSON's failure-message truncation. Without
+        # this every L3 STARTUP fail reads "Engine core ini..." with the
+        # actual cause below the cutoff (smoke 2026-04-25 22:55 surfaced
+        # this).
+        self.result_dir.mkdir(parents=True, exist_ok=True)
+        tid = self._current_trial_id or "unknown"
+        self._wrapper_stdout_path = self.result_dir / f"{tid}_vllm.out"
+        self._wrapper_stderr_path = self.result_dir / f"{tid}_vllm.err"
         env = os.environ.copy()
         # Use the same Python that's running autoinfer (carries the venv
         # with vllm + triton installed).
         self._process = subprocess.Popen(
             [sys.executable, str(path)],
             env=env,
-            stdout=subprocess.PIPE,
-            stderr=subprocess.PIPE,
+            stdout=self._wrapper_stdout_path.open("wb"),
+            stderr=self._wrapper_stderr_path.open("wb"),
         )
         self._wait_ready()
 
@@ -301,22 +321,42 @@ class L3VllmKernelAdapter:
         while time.monotonic() < deadline:
             if self._process.poll() is not None:
                 code = self._process.returncode
-                stderr = self._drain_stderr()
+                # The full stderr is in self._wrapper_stderr_path; the
+                # trial JSON's failure message includes a hint pointing
+                # to it. Surface the LAST chunk so the message itself
+                # is informative even without opening the file.
+                tail = self._read_stderr_tail(2000)
                 raise RuntimeError(
-                    f"patched vllm exited during startup (code {code}): {stderr[-400:]}"
+                    f"patched vllm exited during startup (code {code}); "
+                    f"last 2000 chars of stderr:\n{tail}"
                 )
             if _tcp_open("127.0.0.1", self.candidate_port, timeout_s=1.0):
                 return
             time.sleep(2.0)
-        raise TimeoutError(f"patched vllm not ready on port {self.candidate_port}")
+        raise TimeoutError(
+            f"patched vllm not ready on port {self.candidate_port} "
+            f"(timeout={self.startup_timeout_s}s)"
+        )
 
-    def _drain_stderr(self) -> str:
-        if self._process is None or self._process.stderr is None:
+    def _read_stderr_tail(self, n: int) -> str:
+        """Read the last n chars of the wrapper's stderr file, if any."""
+        if self._wrapper_stderr_path is None:
             return ""
         try:
-            return self._process.stderr.read().decode("utf-8", errors="replace")
+            data = self._wrapper_stderr_path.read_text(errors="replace")
         except OSError:
             return ""
+        return data[-n:]
+
+    def _log_hint(self, trial_id: str) -> str:
+        """Append-friendly pointer to the per-trial vLLM log files."""
+        if self._wrapper_stderr_path is None:
+            return ""
+        return (
+            f" — full stderr at "
+            f"{self._wrapper_stderr_path.relative_to(self.result_dir.parent)} "
+            f"if reachable"
+        )
 
     def _stop_candidate(self) -> None:
         if self._process is not None:
@@ -327,23 +367,36 @@ class L3VllmKernelAdapter:
                 except subprocess.TimeoutExpired:
                     self._process.kill()
                     self._process.wait()
+            # Close the file handles we passed as stdout/stderr.
+            import contextlib as _ctx
+
+            for stream in (self._process.stdout, self._process.stderr):
+                if stream is not None:
+                    with _ctx.suppress(OSError):
+                        stream.close()
             self._process = None
         # Best-effort cleanup of the wrapper file. It's small, but
         # leaving stale wrappers around offends the no-temp-file-leaks
-        # invariant the original compile_candidate violated.
+        # invariant the original compile_candidate violated. We keep
+        # the per-trial stdout/stderr files — they're under result_dir
+        # so they ride along with trial JSON artifacts.
         if self._wrapper_path is not None:
             import contextlib
 
             with contextlib.suppress(OSError):
                 self._wrapper_path.unlink(missing_ok=True)
             self._wrapper_path = None
+        self._current_trial_id = None
 
     def _fail(self, trial: TrialInput, kind: FailureKind, msg: str) -> TrialOutput:
+        # Clip at 4000 chars (vs 500 in L1/L2) so the full vLLM startup
+        # traceback fits in the trial JSON. The per-trial _vllm.err file
+        # has the unclipped version for debugging.
         return TrialOutput(
             measurement=None,
             failure=FailureRecord(
                 kind=kind,
-                message=msg[:500],
+                message=msg[:4000],
                 trial_id=trial.trial_id,
                 layer=self.layer_name,
             ),
