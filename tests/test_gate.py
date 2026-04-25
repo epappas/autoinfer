@@ -41,6 +41,49 @@ def test_kl_floors_missing_candidate_token() -> None:
     assert kl > 10.0  # large positive from log(1/1e-10) contribution
 
 
+def test_js_zero_for_identical_distributions() -> None:
+    from autoinfer.harness.gate import topk_js_divergence
+
+    ref = [{"a": math.log(0.5), "b": math.log(0.5)}]
+    cand = [{"a": math.log(0.5), "b": math.log(0.5)}]
+    assert topk_js_divergence(ref, cand) < 1e-9
+
+
+def test_js_bounded_for_completely_disjoint_topk() -> None:
+    """Same case that blows up KL (missing token) — JS stays bounded by log(2)."""
+    from autoinfer.harness.gate import topk_js_divergence
+
+    ref = [{"zzz": math.log(1.0)}]
+    cand = [{"aaa": math.log(1.0)}]
+    js = topk_js_divergence(ref, cand)
+    # log(2) is the upper bound for symmetric distributions
+    assert 0.0 < js <= math.log(2) + 1e-9
+
+
+def test_js_symmetric_under_swap() -> None:
+    from autoinfer.harness.gate import topk_js_divergence
+
+    ref = [{"a": math.log(0.7), "b": math.log(0.3)}]
+    cand = [{"a": math.log(0.4), "b": math.log(0.6)}]
+    forward = topk_js_divergence(ref, cand)
+    backward = topk_js_divergence(cand, ref)
+    assert abs(forward - backward) < 1e-9
+
+
+def test_js_infinity_on_length_mismatch() -> None:
+    from autoinfer.harness.gate import topk_js_divergence
+
+    ref = [{"a": math.log(1.0)}, {"a": math.log(1.0)}]
+    cand = [{"a": math.log(1.0)}]
+    assert topk_js_divergence(ref, cand) == float("inf")
+
+
+def test_js_zero_for_empty_sequences() -> None:
+    from autoinfer.harness.gate import topk_js_divergence
+
+    assert topk_js_divergence([], []) == 0.0
+
+
 def test_self_kl_aggregate_well_behaved_distribution() -> None:
     """Median-cap doesn't change anything when the data is well-behaved."""
     from autoinfer.harness.gate import _aggregate_self_kl

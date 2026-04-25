@@ -50,6 +50,49 @@ def topk_kl_divergence(
     return total / len(ref)
 
 
+def topk_js_divergence(
+    ref: list[dict[str, float]],
+    cand: list[dict[str, float]],
+) -> float:
+    """Symmetric, bounded top-K Jensen-Shannon divergence.
+
+    Unlike top-K KL with a hard floor (which inflates a single missing
+    token to ~30 KL units), JS works on the **union** of both top-K
+    sets, renormalises each side over that union, and averages two
+    KLs against the mean distribution. Bounded in ``[0, log(2)]`` so
+    one outlier prompt cannot blow the noise ceiling open.
+
+    Returns the mean per-position JS divergence (in nats).
+    """
+    if len(ref) != len(cand):
+        return float("inf")
+    if not ref:
+        return 0.0
+    total = 0.0
+    for ref_pos, cand_pos in zip(ref, cand, strict=True):
+        union = set(ref_pos) | set(cand_pos)
+        if not union:
+            continue
+        # Renormalise both sides over the union — top-K only gives us
+        # exposed mass; assume missing tokens carry zero (NOT floor).
+        p_raw = {t: math.exp(ref_pos.get(t, _LOG_FLOOR)) for t in union}
+        q_raw = {t: math.exp(cand_pos.get(t, _LOG_FLOOR)) for t in union}
+        p_sum = sum(p_raw.values()) or 1.0
+        q_sum = sum(q_raw.values()) or 1.0
+        p = {t: v / p_sum for t, v in p_raw.items()}
+        q = {t: v / q_sum for t, v in q_raw.items()}
+        js = 0.0
+        for t in union:
+            pt, qt = p[t], q[t]
+            mt = 0.5 * (pt + qt)
+            if pt > 0 and mt > 0:
+                js += 0.5 * pt * math.log(pt / mt)
+            if qt > 0 and mt > 0:
+                js += 0.5 * qt * math.log(qt / mt)
+        total += js
+    return total / len(ref)
+
+
 def fetch_logprobs(
     endpoint: str,
     model: str,
