@@ -64,12 +64,16 @@ policy:
           inside the prompt as a baseline to beat.
 
       Hardware-compat for L1/L2:
-        - FP8 KV / FP8 weights only on H100 (sm_90); fail STARTUP on
-          A100 and A6000.
+        - FP8 KV / FP8 weights only on H100 (sm_90). ANY of
+          quantization=fp8, kv_cache_dtype in {fp8, fp8_e4m3, fp8_e5m2}
+          fail STARTUP on A100 and A6000. The campaign container is
+          2x A100, so L1 trials must NEVER use these.
         - bfloat16 preferred on all three for Qwen3-8B stability.
-        - chunked_prefill=False requires max_num_batched_tokens=32768
-          for Qwen3-8B's max_model_len; smaller values cause vLLM to
-          reject longer prompts. Catalog rule enforces this.
+        - ALWAYS set enable_chunked_prefill=true on L1. With it false,
+          max_num_batched_tokens must equal Qwen3-8B's max_model_len
+          (32768); smaller values cause vLLM to reject longer prompts.
+          The catalog enforces this; proposing chunked_prefill=false
+          with batched_tokens<32768 just wastes the trial.
 
       What to explore:
         - L3 wins where they exist: a faster RMSNorm via Triton on

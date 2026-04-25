@@ -60,11 +60,21 @@ policy:
         - RTX A6000 (Ampere, sm_86, 48 GB) — baseline
 
       Hardware-compat rules to respect:
-        - FP8 KV / FP8 weights only work on H100; quantization=fp8
-          fails startup on A100 and A6000.
-        - bfloat16 is preferred on all three for Qwen3-8B stability.
+        - FP8 KV / FP8 weights only work on H100. ANY of
+          quantization=fp8, kv_cache_dtype in {fp8, fp8_e4m3, fp8_e5m2}
+          fails startup on A100 and A6000. The campaign container's GPUs
+          (where L1 candidates run) are 2x A100, so L1 trials must NEVER
+          use these. L2 may use them only when gpu_type=H100.
+        - bfloat16 is preferred on all three for Qwen3-8B stability;
+          float16 is acceptable on H100 for latency-critical workloads.
         - Spot availability for RTX A6000 at gpu_count=1 is flaky;
           prefer H100 or A100 for the first few L2 trials.
+        - ALWAYS set enable_chunked_prefill=true on L1. The alternative
+          (chunked_prefill=false) requires max_num_batched_tokens=32768
+          to match Qwen3-8B's max_model_len; smaller values cause vLLM
+          to reject longer prompts at startup. The catalog constraint
+          enforces this, so proposing chunked_prefill=false with a
+          smaller batched_tokens just wastes the trial.
 
       Thesis motivation (why joint): prior L1-only runs peaked at
       870 tok/s on A6000; prior L2-only runs peaked at 895 tok/s on
