@@ -320,20 +320,35 @@ def _resolve_gate_prompts(cfg: RunConfig) -> list[str]:
 def _calibrate_max_kl(
     cfg: RunConfig, model: str, prompts: list[str], label: str
 ) -> float:
-    """Run self-KL calibration when enabled; fall back to config ceiling."""
-    effective = cfg.harness.gate.max_kl
+    """Run self-KL calibration; calibration only RAISES the ceiling.
+
+    Self-KL measures reference-vs-reference noise, which under greedy
+    decode is much smaller (~0.05) than the candidate-vs-reference KL
+    of clean configs (~1-5 nats). Using ``5*self_p95`` directly as the
+    gate produces ceilings way below real candidate noise — exactly
+    what killed the smoke v2's L2 H100 trial (kl=4.13 rejected by
+    effective=0.3965).
+
+    The user's configured ``max_kl`` represents their "definitely-real-
+    drift" floor. Calibration should only loosen this when the
+    reference is unusually noisy (raising the ceiling), never tighten
+    below user intent. Take the max of (calibration result, configured
+    max_kl) — calibration becomes a one-way valve.
+    """
+    configured = cfg.harness.gate.max_kl
     if not cfg.harness.gate.calibrate_self_kl:
-        return effective
+        return configured
     from autoinfer.harness.gate import calibrate_self_kl
 
     try:
         stats = calibrate_self_kl(
             endpoint=cfg.harness.gate.replica_uri, model=model, prompts=prompts,
         )
-        return max(stats["p95"] * cfg.harness.gate.calibration_multiplier, 0.1)
+        calibrated = stats["p95"] * cfg.harness.gate.calibration_multiplier
+        return max(calibrated, configured)
     except Exception as e:  # noqa: BLE001
         print(f"[builder-{label}] self-kl calibration failed: {e}; using config max_kl", flush=True)
-        return effective
+        return configured
 
 
 def _build_warmstart_with_seeds(

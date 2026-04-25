@@ -1,0 +1,121 @@
+# Joint L1 x L2 x L3 campaign — full thesis test.
+#
+# Adds L3 (kernel search) on top of the L1 x L2 joint config. Uses the
+# LLM kernel proposer to generate Triton/PyTorch kernel candidates for
+# rmsnorm/silu_mul/rope; the L3 adapter validates correctness against
+# the PyTorch reference and times throughput at the largest shape in
+# the regime.
+#
+# L3 trials are CHEAP (CPU-only adapter compiles + runs the candidate
+# directly inside the campaign container; no remote deployment per
+# trial). Real kernel-vs-kernel speedup data needs a GPU; the campaign
+# container's A100 is fine for that.
+
+name: qwen3-8b-l1-l2-l3-joint
+
+harness:
+  driver:
+    trace_path: ./trace/sharegpt_full.json
+    duration_s: 900
+    slo_ttft_p99_ms: 1500.0
+    slo_tpot_p99_ms: 150.0
+    dataset_name: sharegpt
+    num_prompts: 64
+  gate:
+    replica_uri: http://127.0.0.1:8001
+    prompts_path: ./quality/500_prompts.jsonl
+    smoke_prompts: 20
+    full_prompts: 500
+    batch_sizes: [1]
+    max_kl: 5.0
+    calibrate_self_kl: true
+    calibration_multiplier: 5.0
+  ledger:
+    output_dir: ./runs/qwen3-8b-l1-l2-l3-joint
+    pareto_axes: [tokens_per_sec, tpot_p99_ms, peak_hbm_gb]
+
+policy:
+  warmstart:
+    provider: openai_compatible
+    base_url: https://openrouter.ai/api/v1
+    llm_model: anthropic/claude-sonnet-4
+    n_configs: 4
+    api_key_env: OPENROUTER_API_KEY
+    hardware_notes: |
+      Joint L1 x L2 x L3 search on Qwen3-8B + ShareGPT.
+
+      Layers in scope this campaign:
+        L1 (engine config) — vLLM knobs on the campaign container's
+          local GPU. Trials ~2-3 min each.
+        L2 (topology) — per-trial Basilica deployments across GPU
+          classes (H100/A100/RTX A6000). Trials ~20-25 min each.
+        L3 (kernel) — LLM-proposed kernel candidates compiled and
+          validated against PyTorch references for rmsnorm/silu_mul/
+          rope. Trials ~10-30 sec each (CPU-only adapter).
+
+      L3 specifics for the kernel proposer:
+        - Available target_op values: rmsnorm, silu_mul, rope.
+        - Available shape_regime: small / medium / large (regime
+          controls the test-matrix shapes).
+        - Triton kernels (@triton.jit) are compiled correctly via the
+          tempfile-import path; CPU-only runs of @triton.jit will
+          fail at first call (typed STARTUP failure, useful signal).
+        - Reference implementations for each op are shown to the LLM
+          inside the prompt as a baseline to beat.
+
+      Hardware-compat for L1/L2:
+        - FP8 KV / FP8 weights only on H100 (sm_90); fail STARTUP on
+          A100 and A6000.
+        - bfloat16 preferred on all three for Qwen3-8B stability.
+        - chunked_prefill=False requires max_num_batched_tokens=32768
+          for Qwen3-8B's max_model_len; smaller values cause vLLM to
+          reject longer prompts. Catalog rule enforces this.
+
+      What to explore:
+        - L3 wins where they exist: a faster RMSNorm via Triton on
+          A100 is the most likely first kernel-level win.
+        - L1 wins on the campaign container's hardware once feasible
+          regions are identified (failure-aware surrogate now learns
+          to avoid infeasible configs).
+        - L2 to confirm hardware-class dominance and feed reserve-on-
+          stale into a second-pass L1 search.
+  surrogate:
+    kind: tpe
+    seed: 0
+  fidelity:
+    rungs: [100, 500]
+    eta: 3
+  operator:
+    llm_model: anthropic/claude-sonnet-4
+    cadence: 4
+
+layers:
+  l1_engine:
+    model: Qwen/Qwen3-8B
+    knobs_path: src/autoinfer/layers/l1_engine/knobs.yaml
+    max_trials: 10
+    reserve_cap: 4
+    candidate_port: 8000
+    startup_timeout_s: 600
+  l2_topology:
+    model: Qwen/Qwen3-8B
+    knobs_path: src/autoinfer/layers/l2_topology/knobs.yaml
+    max_trials: 4
+    reserve_cap: 2
+    memory: 64Gi
+    ttl_seconds: 3600
+    deploy_timeout_s: 2100
+  l3_kernel:
+    knobs_path: src/autoinfer/layers/l3_kernel/knobs.yaml
+    # L3 trials are very cheap (~10-30 s each); allocate generously.
+    # Reserve_cap=0 because L3 is the deepest layer — nothing to
+    # invalidate via stale-signal in the other direction.
+    max_trials: 12
+    reserve_cap: 0
+    atol: 1e-3
+    rtol: 1e-3
+    perf_repeats: 5
+    warmup_runs: 2
+
+target:
+  kind: local
