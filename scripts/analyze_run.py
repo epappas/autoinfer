@@ -10,6 +10,10 @@ results.tsv / run_summary.json / hw_context.json) and prints:
 - Phase breakdown (warmstart / surrogate / operator).
 - Best-by-tokens_per_sec and tradeoffs.
 
+Joint-aware: when trials span multiple layers (l1_engine + l2_topology
++ l3_kernel), reports per-layer best, joint Pareto frontier, and the
+single-layer-vs-joint comparison that matters for the thesis claim.
+
 Usage:
     uv run python scripts/analyze_run.py <run-dir>
 """
@@ -21,6 +25,19 @@ import json
 import sys
 from pathlib import Path
 from typing import Any
+
+L1_KNOBS = (
+    "attention_backend",
+    "kv_cache_dtype",
+    "dtype",
+    "enable_prefix_caching",
+    "max_num_batched_tokens",
+    "max_num_seqs",
+    "block_size",
+    "gpu_memory_utilization",
+)
+L2_KNOBS = ("gpu_type", "gpu_count", "dtype", "gpu_memory_utilization", "enforce_eager")
+L3_KNOBS = ("target_op", "shape_regime", "dtype")
 
 
 def load_trials(run_dir: Path) -> list[dict[str, Any]]:
@@ -41,6 +58,8 @@ def load_trials(run_dir: Path) -> list[dict[str, Any]]:
 
 
 def classify(d: dict[str, Any]) -> str:
+    if d.get("stale"):
+        return "stale"
     if d.get("measurement"):
         return "kept"
     if d.get("failure"):
@@ -75,23 +94,26 @@ def pareto_front(kept: list[dict[str, Any]]) -> list[dict[str, Any]]:
     return [a for a in kept if not any(is_dominated(a, b) for b in kept if b is not a)]
 
 
+def _layer_knobs(layer: str) -> tuple[str, ...]:
+    return {"l1_engine": L1_KNOBS, "l2_topology": L2_KNOBS, "l3_kernel": L3_KNOBS}.get(layer, ())
+
+
 def fmt_trial_row(d: dict[str, Any]) -> str:
     c = d["config"]
-    base = (
-        f"{d['trial_id']:24s} {phase_of(d['trial_id']):10s}"
-        f" attn={c.get('attention_backend',''):10s}"
-        f" kv={c.get('kv_cache_dtype',''):8s}"
-        f" dtype={str(c.get('dtype','')):9s}"
-        f" prefix={str(c.get('enable_prefix_caching','')):5s}"
-        f" bt={c.get('max_num_batched_tokens',''):>5}"
-        f" ms={c.get('max_num_seqs',''):>4}"
-        f" bs={c.get('block_size',''):>3}"
-        f" gmu={c.get('gpu_memory_utilization',''):>5}"
-    )
+    layer = d.get("layer", "?")
+    knobs = _layer_knobs(layer)
+    cfg_summary = " ".join(f"{k}={c.get(k, '')}" for k in knobs if k in c)
+    base = f"{d['trial_id']:26s} L={layer[:3]:3s} {phase_of(d['trial_id']):9s} {cfg_summary}"
+    if d.get("stale"):
+        m = d.get("measurement") or {}
+        return (
+            f"STALE {base} -> tok/s={m.get('tokens_per_sec', 0):7.1f}"
+            f" tpot99={m.get('tpot_p99_ms', 0):6.1f}ms (invalidated)"
+        )
     if d.get("measurement"):
         m = d["measurement"]
         return (
-            f"KEPT {base}"
+            f"KEPT  {base}"
             f" -> tok/s={m['tokens_per_sec']:7.1f}"
             f" ttft99={m['ttft_p99_ms']:8.1f}ms"
             f" tpot99={m['tpot_p99_ms']:6.1f}ms"
@@ -99,8 +121,49 @@ def fmt_trial_row(d: dict[str, Any]) -> str:
             f" hbm={m['peak_hbm_gb']:5.1f}GB"
         )
     if d.get("failure"):
-        return f"FAIL {base} -> {d['failure']['kind']}"
-    return f"???? {base}"
+        return f"FAIL  {base} -> {d['failure']['kind']}"
+    return f"????  {base}"
+
+
+def _print_layer_breakdown(trials: list[dict[str, Any]]) -> None:
+    by_layer: dict[str, list[dict[str, Any]]] = {}
+    for t in trials:
+        by_layer.setdefault(t.get("layer", "unknown"), []).append(t)
+    print("PER-LAYER BREAKDOWN:")
+    for layer, ts in sorted(by_layer.items()):
+        kept = [t for t in ts if t.get("measurement") and not t.get("stale")]
+        stale = [t for t in ts if t.get("stale")]
+        fails = [t for t in ts if t.get("failure")]
+        print(
+            f"  {layer:14s} total={len(ts):3d}"
+            f" kept={len(kept):3d} stale={len(stale):3d} fail={len(fails):3d}"
+        )
+        if kept:
+            top = max(kept, key=lambda x: x["measurement"]["tokens_per_sec"])
+            m = top["measurement"]
+            print(
+                f"    best {top['trial_id']}:"
+                f" tok/s={m['tokens_per_sec']:.1f}"
+                f" tpot99={m['tpot_p99_ms']:.1f}ms"
+            )
+    print()
+
+
+def _print_cross_layer(front: list[dict[str, Any]]) -> None:
+    """Surface the joint-vs-single thesis claim."""
+    layers_on_front = {t.get("layer") for t in front}
+    if len(layers_on_front) < 2:
+        return
+    print("CROSS-LAYER PARETO COMPOSITION:")
+    print(f"  layers contributing to frontier: {sorted(layers_on_front)}")
+    for t in sorted(front, key=lambda x: -x["measurement"]["tokens_per_sec"]):
+        m = t["measurement"]
+        print(
+            f"  {t.get('layer', '?'):14s} {t['trial_id']:26s}"
+            f" tok/s={m['tokens_per_sec']:7.1f}"
+            f" tpot99={m['tpot_p99_ms']:6.1f}ms"
+        )
+    print()
 
 
 def main() -> int:
@@ -130,22 +193,33 @@ def main() -> int:
         print(f"  {k:20s} {v}")
     print()
 
-    kept = [t for t in trials if t.get("measurement")]
+    _print_layer_breakdown(trials)
+
+    kept = [t for t in trials if t.get("measurement") and not t.get("stale")]
     if kept:
         front = pareto_front(kept)
-        print(f"PARETO FRONTIER ({len(front)} of {len(kept)} kept):")
+        print(f"PARETO FRONTIER ({len(front)} of {len(kept)} kept, joint across layers):")
         for t in sorted(front, key=lambda x: -x["measurement"]["tokens_per_sec"]):
             print("  " + fmt_trial_row(t))
         print()
+
+        _print_cross_layer(front)
 
         top = max(kept, key=lambda t: t["measurement"]["tokens_per_sec"])
         print("TOP BY TOKENS_PER_SEC:")
         print("  " + fmt_trial_row(top))
         print()
 
-    print("ALL KEPT:")
-    for t in sorted(kept, key=lambda x: -x["measurement"]["tokens_per_sec"]):
+    print("ALL TRIALS (sorted by tok/s, kept first then stale, then fails):")
+    sortable_kept = sorted(
+        [t for t in trials if t.get("measurement")],
+        key=lambda x: -x["measurement"]["tokens_per_sec"],
+    )
+    for t in sortable_kept:
         print("  " + fmt_trial_row(t))
+    for t in trials:
+        if t.get("failure"):
+            print("  " + fmt_trial_row(t))
     return 0
 
 
