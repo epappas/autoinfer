@@ -134,6 +134,29 @@ def _concurrent_first(
         return futures[0].result()
 
 
+def _aggregate_self_kl(per: list[float]) -> dict[str, float]:
+    """Aggregate sorted per-prompt self-KL into a calibration summary.
+
+    Pure: no I/O. Caller supplies the sorted list. The exposed ``p95``
+    is median-capped at 5x median to keep one outlier prompt from
+    blowing the gate ceiling open (see ``calibrate_self_kl``).
+    """
+    if not per:
+        raise ValueError("per must be non-empty")
+    n = len(per)
+    raw_p95 = per[int(n * 0.95)] if n >= 20 else per[-1]
+    median = per[n // 2]
+    p95 = min(raw_p95, 5.0 * median) if median > 0.0 else raw_p95
+    return {
+        "n": float(n),
+        "mean": sum(per) / n,
+        "median": median,
+        "p95": p95,
+        "raw_p95": raw_p95,
+        "max": per[-1],
+    }
+
+
 def calibrate_self_kl(
     endpoint: str,
     model: str,
@@ -146,9 +169,14 @@ def calibrate_self_kl(
 
     Two sequential calls to the SAME endpoint for each prompt; any KL is
     pure scheduling/batch-composition noise, not real drift. Returns a
-    summary dict with ``mean, median, p95, max, n``. Use to set
-    ``max_kl`` as ``multiplier * p95`` so real config-induced drift
-    remains distinguishable from load noise.
+    summary dict with ``mean, median, p95, max, n``.
+
+    The exposed ``p95`` is the **median-capped** 95th percentile —
+    ``min(raw_p95, 5 * median)``. With small samples (n<=20) raw p95
+    degenerates to the max, and one outlier prompt (a single missing
+    top-K token under floor=1e-10 inflates KL by ~30 units per
+    mismatch) blows the noise ceiling 50x. Capping at 5x median keeps
+    well-behaved distributions intact while bounding outlier damage.
     """
     if not prompts:
         raise ValueError("prompts must be non-empty")
@@ -160,15 +188,7 @@ def calibrate_self_kl(
 
     with concurrent.futures.ThreadPoolExecutor(max_workers=concurrency) as ex:
         per = sorted(ex.map(_pair, prompts))
-    n = len(per)
-    p95 = per[int(n * 0.95)] if n >= 20 else per[-1]
-    return {
-        "n": float(n),
-        "mean": sum(per) / n,
-        "median": per[n // 2],
-        "p95": p95,
-        "max": per[-1],
-    }
+    return _aggregate_self_kl(per)
 
 
 def run_gate(

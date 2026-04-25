@@ -41,6 +41,40 @@ def test_kl_floors_missing_candidate_token() -> None:
     assert kl > 10.0  # large positive from log(1/1e-10) contribution
 
 
+def test_self_kl_aggregate_well_behaved_distribution() -> None:
+    """Median-cap doesn't change anything when the data is well-behaved."""
+    from autoinfer.harness.gate import _aggregate_self_kl
+
+    per = sorted([0.05] * 19 + [0.10])  # 20 samples, median 0.05, p95 0.10
+    out = _aggregate_self_kl(per)
+    assert out["n"] == 20.0
+    assert out["median"] == 0.05
+    # raw_p95 = per[19] = 0.10; cap = 5 * 0.05 = 0.25 → keep raw
+    assert out["raw_p95"] == 0.10
+    assert out["p95"] == 0.10
+
+
+def test_self_kl_aggregate_caps_outlier_blowup() -> None:
+    """One huge outlier must not blow the p95 above 5x median."""
+    from autoinfer.harness.gate import _aggregate_self_kl
+
+    per = sorted([0.5] * 19 + [95.0])  # one bad prompt at 95
+    out = _aggregate_self_kl(per)
+    assert out["raw_p95"] == 95.0
+    # cap = 5 * 0.5 = 2.5
+    assert out["p95"] == 2.5
+
+
+def test_self_kl_aggregate_zero_median_keeps_raw() -> None:
+    """If every well-behaved sample is exactly zero, fall through to raw p95."""
+    from autoinfer.harness.gate import _aggregate_self_kl
+
+    per = [0.0] * 19 + [3.0]
+    out = _aggregate_self_kl(per)
+    assert out["median"] == 0.0
+    assert out["p95"] == 3.0
+
+
 def test_gate_result_passes_requires_both_conditions() -> None:
     r = GateResult(
         mean_kl=0.01,
