@@ -29,6 +29,8 @@ from autoinfer.policy import (
     OptunaSurrogate,
     ProposalLLM,
 )
+from autoinfer.policy.feasibility import FeasibilityModel
+from autoinfer.policy.surrogate import ConstrainedOptunaSurrogate, Surrogate
 from autoinfer.telemetry import EventLog, capture_hw_context, write_hw_context
 
 
@@ -129,12 +131,8 @@ def _build_l1_spec(
         dataset_name=cfg.harness.driver.dataset_name,
         num_prompts=cfg.harness.driver.num_prompts,
     )
-    surrogate = OptunaSurrogate(
-        kind=cfg.policy.surrogate.kind,
-        seed=cfg.policy.surrogate.seed,
-        surface=adapter.surface(),
-        objective_axis="tokens_per_sec",
-        maximize=True,
+    surrogate = _build_surrogate(
+        cfg, surface=adapter.surface(), objective_axis="tokens_per_sec", maximize=True,
     )
     warmstart = _build_warmstart(cfg.policy.warmstart, catalog)
 
@@ -192,12 +190,8 @@ def _build_l2_spec(
         ttl_seconds=l2_cfg.ttl_seconds,
         deploy_timeout_s=l2_cfg.deploy_timeout_s,
     )
-    surrogate = OptunaSurrogate(
-        kind=cfg.policy.surrogate.kind,
-        seed=cfg.policy.surrogate.seed,
-        surface=adapter.surface(),
-        objective_axis="tokens_per_sec",
-        maximize=True,
+    surrogate = _build_surrogate(
+        cfg, surface=adapter.surface(), objective_axis="tokens_per_sec", maximize=True,
     )
 
     defaults_cfg = l2_defaults(catalog)
@@ -250,12 +244,8 @@ def _build_l3_spec(
         perf_repeats=l3_cfg.perf_repeats,
         warmup_runs=l3_cfg.warmup_runs,
     )
-    surrogate = OptunaSurrogate(
-        kind=cfg.policy.surrogate.kind,
-        seed=cfg.policy.surrogate.seed,
-        surface=adapter.surface(),
-        objective_axis="tokens_per_sec",
-        maximize=True,
+    surrogate = _build_surrogate(
+        cfg, surface=adapter.surface(), objective_axis="tokens_per_sec", maximize=True,
     )
     seeds = reference_seed_configs()
     warmstart: ProposalLLM
@@ -310,6 +300,41 @@ def _build_operator(cfg: RunConfig, specs: Iterable[str]) -> Operator | None:
     )
     op_llm = _build_warmstart_with_seeds(op_wcfg, [])
     return Operator(llm=op_llm, cadence=cfg.policy.operator.cadence)
+
+
+def _build_surrogate(
+    cfg: RunConfig,
+    surface: dict[str, Any],
+    objective_axis: str,
+    maximize: bool,
+) -> Surrogate:
+    """Build the perf surrogate, optionally wrapped in feasibility constraint.
+
+    When ``cfg.policy.surrogate.feasibility_threshold > 0``, returns a
+    ``ConstrainedOptunaSurrogate`` that learns a feasibility classifier
+    from typed failures and rejects candidates whose nearest-neighbor
+    history is too failure-dense (see policy/feasibility.py for the
+    motivating data).
+    """
+    s_cfg = cfg.policy.surrogate
+    inner = OptunaSurrogate(
+        kind=s_cfg.kind,
+        seed=s_cfg.seed,
+        surface=surface,
+        objective_axis=objective_axis,
+        maximize=maximize,
+    )
+    if s_cfg.feasibility_threshold <= 0.0:
+        return inner
+    return ConstrainedOptunaSurrogate(
+        inner=inner,
+        feasibility=FeasibilityModel(
+            k=s_cfg.feasibility_k,
+            min_observations=s_cfg.feasibility_min_observations,
+        ),
+        threshold=s_cfg.feasibility_threshold,
+        max_resamples=s_cfg.feasibility_max_resamples,
+    )
 
 
 def _resolve_gate_prompts(cfg: RunConfig) -> list[str]:

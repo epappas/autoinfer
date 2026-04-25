@@ -91,6 +91,37 @@ class WarmstartConfig(_Base):
 class SurrogateConfig(_Base):
     kind: SurrogateKind = "tpe"
     seed: int = 0
+    feasibility_threshold: float = Field(
+        default=0.0,
+        ge=0.0,
+        le=1.0,
+        description=(
+            "If > 0, wrap the perf surrogate in ConstrainedOptunaSurrogate "
+            "with a FeasibilityModel that rejects candidates whose nearest-"
+            "neighbor history is too failure-dense. 0.0 disables (default, "
+            "preserves prior behavior). 0.4 is a sane starting value for "
+            "infeasibility-rich surfaces like L1 engine knobs."
+        ),
+    )
+    feasibility_max_resamples: int = Field(
+        default=8,
+        ge=1,
+        description="Resampling budget per suggest() before falling back.",
+    )
+    feasibility_k: int = Field(
+        default=3,
+        ge=1,
+        description="Nearest-neighbor count for the feasibility classifier.",
+    )
+    feasibility_min_observations: int = Field(
+        default=4,
+        ge=0,
+        description=(
+            "Below this many recorded trials, the classifier returns 1.0 "
+            "(no constraint signal yet). Default matches typical warmstart "
+            "batch size."
+        ),
+    )
 
 
 class FidelityConfig(_Base):

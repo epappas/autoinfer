@@ -100,6 +100,12 @@ policy:
   surrogate:
     kind: tpe
     seed: 0
+    # Constrained BO: reject candidates whose nearest-neighbor history
+    # is failure-dense. Addresses 2026-04-25 0/8 L1 surrogate hit rate.
+    feasibility_threshold: 0.4
+    feasibility_max_resamples: 8
+    feasibility_k: 3
+    feasibility_min_observations: 4
   fidelity:
     rungs: [100, 500]
     eta: 3

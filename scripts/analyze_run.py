@@ -217,7 +217,7 @@ def main() -> int:
         for t in kept:
             layers_seen.setdefault(t.get("layer", "unknown"), []).append(t)
         print("PER-LAYER BEST:")
-        for layer, ts in sorted(layers_seen.items()):
+        for _, ts in sorted(layers_seen.items()):
             best = max(ts, key=lambda x: x["measurement"]["tokens_per_sec"])
             print("  " + fmt_trial_row(best))
         print()

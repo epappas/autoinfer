@@ -86,6 +86,17 @@ policy:
   surrogate:
     kind: tpe
     seed: 0
+    # Constrained BO via FeasibilityModel: reject candidates whose
+    # nearest-neighbor history is failure-dense. L1 needs this most
+    # (kv_cache_dtype=fp8 + sm_80 etc. structurally infeasible) but
+    # the surrogate is configured globally, so L3's clean surface
+    # also runs through the filter — its predict_proba returns 1.0
+    # on success-rich neighborhoods so the resampling overhead is
+    # negligible there.
+    feasibility_threshold: 0.4
+    feasibility_max_resamples: 8
+    feasibility_k: 3
+    feasibility_min_observations: 4
   fidelity:
     rungs: [100, 500]
     eta: 3

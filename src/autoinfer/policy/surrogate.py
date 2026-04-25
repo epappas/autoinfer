@@ -18,10 +18,12 @@ sampler learn to avoid the infeasible region by modelling it as
 
 from __future__ import annotations
 
+from dataclasses import dataclass, field
 from typing import Any, NamedTuple, Protocol, runtime_checkable
 
 from autoinfer.harness.failure import FailureKind
 from autoinfer.harness.ledger import Measurement
+from autoinfer.policy.feasibility import FeasibilityModel
 
 
 class Suggestion(NamedTuple):
@@ -110,6 +112,19 @@ class OptunaSurrogate:
             raise ValueError("measurement required when failure is None")
         self._study.tell(trial, measurement.value(self._axis))
 
+    def prune(self, trial_id: str) -> None:
+        """Discard a pending trial without modeling it.
+
+        Used by the constrained wrapper to drop rejected resample
+        candidates so they don't pollute the perf model's KDE — Optuna's
+        ``state=PRUNED`` is the canonical way to mark a trial as
+        "ignore for model fitting" without leaving it dangling.
+        """
+        trial = self._pending.pop(trial_id, None)
+        if trial is None:
+            raise KeyError(f"no pending trial {trial_id!r}")
+        self._study.tell(trial, state=self._optuna.trial.TrialState.PRUNED)
+
     def _penalty_for_failure(self, failure: FailureKind) -> float:
         """Worst-possible objective value for the configured direction.
 
@@ -131,3 +146,102 @@ class OptunaSurrogate:
         if kind == "categorical":
             return trial.suggest_categorical(name, spec["values"])
         raise ValueError(f"unknown surface type for {name!r}: {kind!r}")
+
+
+@dataclass
+class ConstrainedOptunaSurrogate:
+    """``OptunaSurrogate`` + ``FeasibilityModel`` — constrained BO.
+
+    Wraps the perf surrogate with a feasibility classifier so the
+    sampler avoids structurally-infeasible regions instead of just
+    being penalised inside them. Built to address the 0/4 L1 reserve
+    hit rate in the 2026-04-25 full L1xL2xL3 campaign, where TPE
+    kept proposing ``kv_cache_dtype=fp8_e5m2`` on A100 even after
+    multiple penalty signals — the penalty encoding doesn't extract
+    structural rules; the feasibility classifier does.
+
+    Sampling protocol:
+    1. Ask the perf surrogate for a candidate.
+    2. Score its feasibility via the classifier.
+    3. If P(success) >= ``threshold``, accept and return.
+    4. Otherwise, remember it as fallback; ask again.
+    5. After ``max_resamples`` attempts, accept the highest-scoring
+       fallback and prune the rest (discarded from KDE via
+       ``OptunaSurrogate.prune``).
+
+    On record, both models learn: the perf surrogate via existing
+    penalty-or-score logic; the feasibility model via the typed
+    success/failure outcome.
+
+    First ``min_observations`` trials skip the feasibility filter (the
+    classifier returns 1.0 there) so the search isn't gated by no-data
+    pessimism.
+    """
+
+    inner: OptunaSurrogate
+    feasibility: FeasibilityModel
+    threshold: float = 0.4
+    """Minimum P(success) to accept a candidate without resampling."""
+
+    max_resamples: int = 8
+    """How many times to ask the inner surrogate before falling back to
+    the highest-feasibility candidate seen so far."""
+
+    _suggested_configs: dict[str, dict[str, Any]] = field(default_factory=dict)
+
+    def suggest(self) -> Suggestion:
+        best_sugg: Suggestion | None = None
+        best_score: float = -1.0
+        # Trials suggested but not chosen this round; pruned at the end
+        # so Optuna's KDE doesn't see them.
+        to_prune: list[str] = []
+        for _ in range(max(1, self.max_resamples)):
+            sugg = self.inner.suggest()
+            score = self.feasibility.predict_proba(sugg.config)
+            if score >= self.threshold:
+                # Accept: prune everything we rejected before this.
+                for tid in to_prune:
+                    self.inner.prune(tid)
+                self._suggested_configs[sugg.trial_id] = sugg.config
+                return sugg
+            # Below threshold; track the best fallback.
+            if score > best_score:
+                if best_sugg is not None:
+                    to_prune.append(best_sugg.trial_id)
+                best_sugg = sugg
+                best_score = score
+            else:
+                to_prune.append(sugg.trial_id)
+        # All attempts below threshold — return the least-bad. Prune
+        # the rest so the perf KDE only sees the one we'll actually run.
+        for tid in to_prune:
+            self.inner.prune(tid)
+        # ``best_sugg`` is non-None as long as max_resamples >= 1.
+        assert best_sugg is not None
+        self._suggested_configs[best_sugg.trial_id] = best_sugg.config
+        return best_sugg
+
+    def record(
+        self,
+        trial_id: str,
+        measurement: Measurement | None,
+        failure: FailureKind | None,
+    ) -> None:
+        # Recover the config we associated with this trial at suggest
+        # time so the feasibility model sees the actual run config.
+        config = self._suggested_configs.pop(trial_id, None)
+        if config is None:
+            raise KeyError(f"no suggested config for trial {trial_id!r}")
+        # Perf surrogate learns first (existing penalty/score logic).
+        self.inner.record(trial_id, measurement, failure)
+        # Feasibility classifier learns next.
+        self.feasibility.record(
+            config,
+            success=(failure is None),
+            failure_kind=failure,
+        )
+
+    def prune(self, trial_id: str) -> None:
+        """Pass-through to the inner surrogate."""
+        self._suggested_configs.pop(trial_id, None)
+        self.inner.prune(trial_id)
