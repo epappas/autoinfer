@@ -113,6 +113,38 @@ src/autoinfer/
 - Do not fake, mock, or stub what the user asked to be real.
 - Never claim a task complete without running and verifying it.
 
+## Backlog discipline
+
+`TODO.md` at repo root is the **single source of truth** for open
+tasks, tracked corner-cuts, and research extensions. Bands by
+priority (P0 / P1 / P2). Update as part of every commit that opens
+or closes an item — the commit that fixes T-XX moves the row to the
+"Closed" section and references the closing commit hash.
+
+Don't track open work in commit messages, code TODOs, or scratch
+files. If it's worth tracking, it goes in `TODO.md`.
+
+## Campaign discipline
+
+**No campaign launches without a pre-registration document on
+`main`.** Pre-registration goes in
+`docs/research/campaigns/NN-<name>-<date>.md` using the structure in
+`TEMPLATE.md`:
+
+1. Goal — questions to answer with measurable success criteria.
+2. Pre-flight changes — concrete commit references; the run starts
+   from a known commit.
+3. Configuration — exact RunConfig + launch command + overrides.
+4. Expected timeline + cost.
+5. Expected outcomes (predictions written *before* data is seen).
+6. Decision tree from the data.
+
+After the run, the "Outcome" section reconciles predictions with
+reality, including cases where predictions were wrong. The campaign's
+analysis writeup goes into `docs/research/references/NN-<analysis>.md`
+as before; the pre-registration is the *prediction* document, the
+reference is the *reconciliation* document.
+
 ## Thesis → code traceability
 
 Every non-trivial PR should cite the principle (P#) or claim (C#) it
