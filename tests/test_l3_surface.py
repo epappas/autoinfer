@@ -10,6 +10,7 @@ from autoinfer.layers.l3_kernel import (
     compile_candidate,
     load_catalog,
     make_inputs,
+    paired_control_seed_configs,
     reference_seed_configs,
     resolve_dtype,
     to_surrogate_surface,
@@ -128,3 +129,32 @@ def test_reference_seed_configs_cover_all_ops() -> None:
     assert ops == {"rmsnorm", "silu_mul", "rope"}
     for s in seeds:
         assert "source" in s and "entry_fn" in s
+
+
+def test_paired_control_seed_configs_serving_realistic_cells() -> None:
+    """T-27. Cells must cover serving-realistic regions (campaign 01
+    KEPT band: bf16/fp16, medium/large) and exclude rope (T-20) and
+    float32 (not used in Qwen3-8B serving). Each cell carries a
+    ready-to-run reference source so PairedControlProposer can use
+    these directly as the reference half of each pair."""
+    seeds = paired_control_seed_configs()
+    assert len(seeds) > 0
+    ops = {s["target_op"] for s in seeds}
+    dtypes = {s["dtype"] for s in seeds}
+    regimes = {s["shape_regime"] for s in seeds}
+    assert "rope" not in ops, "rope excluded — injector lacks RoPE support (T-20)"
+    assert ops == {"rmsnorm", "silu_mul"}
+    assert dtypes == {"bfloat16", "float16"}, f"unexpected dtypes: {dtypes}"
+    assert "float32" not in dtypes
+    assert regimes <= {"medium", "large"}, f"unexpected regimes: {regimes}"
+    # Each seed is a ready-to-run config.
+    for s in seeds:
+        assert "source" in s and s["source"]
+        assert "entry_fn" in s and s["entry_fn"]
+
+
+def test_paired_control_cells_are_unique() -> None:
+    """No duplicates — each cell should appear once."""
+    seeds = paired_control_seed_configs()
+    cells = [(s["target_op"], s["dtype"], s["shape_regime"]) for s in seeds]
+    assert len(cells) == len(set(cells))

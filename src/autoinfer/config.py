@@ -224,6 +224,18 @@ class L3KernelConfig(_Base):
             "Default False to keep existing campaigns reproducible."
         ),
     )
+    warmstart_n: int | None = Field(
+        default=None,
+        ge=1,
+        le=100,
+        description=(
+            "Per-layer warmstart batch size override. When None, falls "
+            "back to ``policy.warmstart.n_configs``. Useful when "
+            "paired_control=True so L3 can warmstart 12 trials (6 "
+            "ref/novel pairs) without forcing L1 / L2 to also expand "
+            "their warmstart batch. T-27."
+        ),
+    )
 
 
 class LayersConfig(_Base):

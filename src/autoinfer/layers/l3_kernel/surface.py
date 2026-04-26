@@ -274,6 +274,56 @@ def reference_seed_configs() -> list[dict[str, Any]]:
     return seeds
 
 
+# Campaign 02 paired-control cells (T-27).
+#
+# Cells selected from campaign 01's KEPT-trial cluster (515-621 tok/s,
+# all bf16/fp16 at medium/large) — the regions where L3 vLLM trials
+# actually produce serving-grade signal. rope is excluded because the
+# v1 injector doesn't yet support RoPE (T-20). float32 is excluded
+# because vLLM serves Qwen3-8B at bf16/fp16; an fp32 kernel inside an
+# fp32-cast wrapper would not exercise serving-realistic numerics.
+_PAIRED_CONTROL_DEFAULT_CELLS: tuple[tuple[str, str, str], ...] = (
+    ("rmsnorm",  "bfloat16", "medium"),
+    ("rmsnorm",  "bfloat16", "large"),
+    ("rmsnorm",  "float16",  "large"),
+    ("silu_mul", "bfloat16", "medium"),
+    ("silu_mul", "bfloat16", "large"),
+    ("silu_mul", "float16",  "large"),
+)
+
+
+def paired_control_seed_configs() -> list[dict[str, Any]]:
+    """T-27. Reference seeds at the cells Campaign 02 will A/B at.
+
+    Returns one reference config per cell in
+    ``_PAIRED_CONTROL_DEFAULT_CELLS``. Each is a fully-formed warmstart
+    config (target_op, dtype, shape_regime, source, entry_fn) that
+    ``PairedControlProposer`` cycles through as the reference half of
+    each pair.
+
+    Cells are curated, not exhaustive: 6 (op, dtype, regime) tuples
+    cover the bands where campaign 01 produced KEPT L3 trials.
+    Exhaustive (2 ops × 2 dtypes × 3 regimes = 12 cells) would consume
+    L3's 12-trial budget on warmstart alone, leaving no surrogate or
+    operator headroom — see campaign 02 doc for the trade-off.
+    """
+    seeds: list[dict[str, Any]] = []
+    for op, dtype, regime in _PAIRED_CONTROL_DEFAULT_CELLS:
+        if op not in REFERENCE_SOURCES:
+            raise ValueError(f"unknown target_op {op!r} in paired-control cells")
+        entry, src = REFERENCE_SOURCES[op]
+        seeds.append(
+            {
+                "target_op": op,
+                "dtype": dtype,
+                "shape_regime": regime,
+                "source": src,
+                "entry_fn": entry,
+            }
+        )
+    return seeds
+
+
 __all__ = [
     "KernelCallable",
     "KnobCatalog",
@@ -282,6 +332,7 @@ __all__ = [
     "compile_candidate",
     "load_catalog",
     "make_inputs",
+    "paired_control_seed_configs",
     "reference_seed_configs",
     "resolve_dtype",
     "test_shapes",

@@ -277,7 +277,12 @@ def _build_l3_spec(
     surrogate = _build_surrogate(
         cfg, surface=adapter.surface(), objective_axis="tokens_per_sec", maximize=True,
     )
-    seeds = reference_seed_configs()
+    if l3_cfg.paired_control:
+        from autoinfer.layers.l3_kernel import paired_control_seed_configs
+
+        seeds = paired_control_seed_configs()
+    else:
+        seeds = reference_seed_configs()
     warmstart: ProposalLLM
     if cfg.policy.warmstart.provider == "deterministic":
         if l3_cfg.paired_control:
@@ -301,15 +306,17 @@ def _build_l3_spec(
             warmstart = base_proposer
 
     max_trials = max_trials_override if max_trials_override is not None else l3_cfg.max_trials
+    base_n = (
+        l3_cfg.warmstart_n
+        if l3_cfg.warmstart_n is not None
+        else cfg.policy.warmstart.n_configs
+    )
     if l3_cfg.paired_control:
         # Pair size = 2; warmstart_n must be a multiple of 2 so each
         # reference seed has its novel partner inside the warmstart batch.
-        warmstart_n = max(
-            2,
-            (min(cfg.policy.warmstart.n_configs, 2 * len(seeds)) // 2) * 2,
-        )
+        warmstart_n = max(2, (min(base_n, 2 * len(seeds)) // 2) * 2)
     else:
-        warmstart_n = min(cfg.policy.warmstart.n_configs, len(seeds))
+        warmstart_n = min(base_n, len(seeds))
     spec = LayerSpec(
         adapter=adapter,
         surrogate=surrogate,

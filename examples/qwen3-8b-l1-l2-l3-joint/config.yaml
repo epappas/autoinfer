@@ -134,14 +134,24 @@ layers:
     # development without a GPU but Pareto-ineligible for the joint
     # frontier.
     mode: vllm
-    # 12 base + 2 reserve: more L3 attempts increase the chance of
-    # seeing novel-vs-reference variance (smoke 4 had only 2 KEPT L3
-    # trials, not enough signal for Q1). Reserve cap lets L3 re-explore
-    # if a deeper layer ever invalidates above (currently it's the
-    # deepest layer so reserve only fires from operator stalls).
-    # See campaign 01 doc Q1.
-    max_trials: 12
-    reserve_cap: 2
+    # Campaign 02: paired-control L3 warmstart. Each warmstart trial
+    # is a (reference, llm-novel) pair at the same (target_op, dtype,
+    # shape_regime) cell, drawn from `paired_control_seed_configs()`
+    # (6 cells over rmsnorm/silu_mul x bf16/fp16 x medium/large).
+    # Closes T-27's pre-condition: campaign 01 had 2 LLM-novel trials
+    # at different cells than its reference trials, so no honest A/B.
+    paired_control: true
+    # warmstart_n=12: 6 cells x 2 (ref + novel) = full paired-control
+    # batch. Per-layer override so L1/L2 keep their existing 4-trial
+    # warmstart batches via policy.warmstart.n_configs=4.
+    warmstart_n: 12
+    # 12 base + 4 reserve: 12 = full paired-control warmstart; reserve
+    # 4 leaves headroom for surrogate exploration once the warmstart
+    # baseline is set. Even though L3 is the deepest layer (reserve
+    # currently only fires from operator stalls), keeping reserve_cap
+    # > 0 lets the operator step in if the surrogate stalls.
+    max_trials: 16
+    reserve_cap: 4
     atol: 1e-3
     rtol: 1e-3
     perf_repeats: 5
