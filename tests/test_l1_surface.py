@@ -9,6 +9,7 @@ from autoinfer.layers.l1_engine.surface import (
     KnobSpec,
     build_vllm_serve_args,
     defaults,
+    derive_knob_classes,
     load_catalog,
     to_surrogate_surface,
     violates_constraints,
@@ -159,6 +160,29 @@ def test_chunked_prefill_off_requires_full_max_model_len_batched_tokens() -> Non
     assert rule in violates_constraints(too_small_2, catalog)
     assert rule not in violates_constraints(enough, catalog)
     assert rule not in violates_constraints(chunked_on, catalog)
+
+
+def test_derive_knob_classes_collapses_fp8_variants() -> None:
+    """T-26: catalog rule with ``when_values=[fp8, fp8_e4m3, fp8_e5m2]``
+    becomes a single class so the FeasibilityModel generalises a single
+    fp8 failure to all variants."""
+    catalog = load_catalog(_REPO_CATALOG)
+    classes = derive_knob_classes(catalog)
+    assert "kv_cache_dtype" in classes
+    fp8_class = classes["kv_cache_dtype"]
+    # All three fp8 variants share one class label.
+    assert fp8_class["fp8"] == fp8_class["fp8_e4m3"] == fp8_class["fp8_e5m2"]
+    # ``auto`` is unclassed (no rule lists it).
+    assert "auto" not in fp8_class
+
+
+def test_derive_knob_classes_skips_non_string_when_values() -> None:
+    """The chunked_prefill rule's when_values=[false] is bool, which has
+    natural distance semantics — derive_knob_classes shouldn't emit a
+    class entry for it."""
+    catalog = load_catalog(_REPO_CATALOG)
+    classes = derive_knob_classes(catalog)
+    assert "enable_chunked_prefill" not in classes
 
 
 def test_unknown_knob_type_rejected(tmp_path: Path) -> None:

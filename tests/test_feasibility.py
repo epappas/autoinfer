@@ -244,6 +244,117 @@ def test_predict_proba_handles_mixed_type_configs() -> None:
     assert p > 0.8
 
 
+def test_knob_distance_class_map_collapses_intra_class_to_zero() -> None:
+    """T-26: fp8 variants in one class compare at distance 0 within that knob."""
+    cm = {"fp8": "kv_fp8", "fp8_e4m3": "kv_fp8", "fp8_e5m2": "kv_fp8"}
+    assert _knob_distance("fp8", "fp8_e4m3", class_map=cm) == 0.0
+    assert _knob_distance("fp8_e4m3", "fp8_e5m2", class_map=cm) == 0.0
+
+
+def test_knob_distance_class_map_unrelated_value_stays_at_one() -> None:
+    """Values not in the class_map fall back to per-string Hamming."""
+    cm = {"fp8": "kv_fp8", "fp8_e4m3": "kv_fp8"}
+    assert _knob_distance("fp8", "auto", class_map=cm) == 1.0
+    assert _knob_distance("auto", "auto", class_map=cm) == 0.0
+
+
+def test_knob_distance_class_map_does_not_affect_non_strings() -> None:
+    """Bools and numerics keep their natural distances even with a class_map present."""
+    cm = {"fp8": "kv_fp8"}
+    assert _knob_distance(True, False, class_map=cm) == 1.0
+    assert _knob_distance(1, 2, class_map=cm) == pytest.approx(0.5)
+
+
+def test_predict_proba_generalises_within_knob_class() -> None:
+    """T-26 core test: 3 fp8_e4m3 STARTUP failures + class collapse cause
+    fp8_e5m2 to predict near-zero P(success). Without the class map, the
+    legacy classifier (campaign 01 evidence) couldn't extract this — it
+    saw fp8_e4m3 and fp8_e5m2 as distance 1, so neighbors were dominated
+    by configs that happened to share other knobs.
+    """
+    classes = {
+        "kv_cache_dtype": {
+            "fp8": "kv_fp8",
+            "fp8_e4m3": "kv_fp8",
+            "fp8_e5m2": "kv_fp8",
+        },
+    }
+    m = FeasibilityModel(k=3, min_observations=2, knob_classes=classes)
+    # 3 fp8_e4m3 failures (the only fp8 variant explored)
+    for _ in range(3):
+        m.record(
+            {"kv_cache_dtype": "fp8_e4m3", "max_num_seqs": 128},
+            success=False,
+            failure_kind=FailureKind.STARTUP,
+        )
+    # 3 auto successes to fill out the history
+    for seqs in (32, 64, 256):
+        m.record(
+            {"kv_cache_dtype": "auto", "max_num_seqs": seqs},
+            success=True,
+        )
+    # Query a never-seen variant in the same class
+    p = m.predict_proba({"kv_cache_dtype": "fp8_e5m2", "max_num_seqs": 128})
+    assert p < 0.2, f"class generalisation failed: p={p}"
+
+
+def test_predict_proba_without_class_map_does_not_generalise_across_variants() -> None:
+    """Counterfactual: without ``knob_classes``, the same history does NOT
+    cleanly predict failure for an unseen fp8 variant — k=3 with one
+    distance-1 neighbor on every other config gives a mixed verdict.
+    Pinning this preserves the campaign-01 evidence that motivated T-26.
+
+    Realistic setup: each historical trial has different non-fp8 knob
+    values too (the campaign-01 surrogate explored mixed regions), so
+    legacy distance is not 0-pegged on irrelevant knobs.
+    """
+    fp8_history = [
+        {"kv_cache_dtype": "fp8_e4m3", "max_num_seqs": 32, "gmu": 0.85},
+        {"kv_cache_dtype": "fp8_e4m3", "max_num_seqs": 64, "gmu": 0.90},
+        {"kv_cache_dtype": "fp8_e4m3", "max_num_seqs": 256, "gmu": 0.92},
+    ]
+    auto_history = [
+        {"kv_cache_dtype": "auto", "max_num_seqs": 128, "gmu": 0.85},
+        {"kv_cache_dtype": "auto", "max_num_seqs": 128, "gmu": 0.88},
+        {"kv_cache_dtype": "auto", "max_num_seqs": 128, "gmu": 0.92},
+    ]
+    query = {"kv_cache_dtype": "fp8_e5m2", "max_num_seqs": 128, "gmu": 0.88}
+
+    m = FeasibilityModel(k=3, min_observations=2)  # no knob_classes
+    for c in fp8_history:
+        m.record(c, success=False, failure_kind=FailureKind.STARTUP)
+    for c in auto_history:
+        m.record(c, success=True)
+    p_legacy = m.predict_proba(query)
+
+    classes = {
+        "kv_cache_dtype": {
+            "fp8": "kv_fp8",
+            "fp8_e4m3": "kv_fp8",
+            "fp8_e5m2": "kv_fp8",
+        }
+    }
+    m_classed = FeasibilityModel(k=3, min_observations=2, knob_classes=classes)
+    for c in fp8_history:
+        m_classed.record(c, success=False, failure_kind=FailureKind.STARTUP)
+    for c in auto_history:
+        m_classed.record(c, success=True)
+    p_classed = m_classed.predict_proba(query)
+
+    assert p_classed < p_legacy, (
+        f"class collapse should sharpen P(fail) prediction: "
+        f"legacy={p_legacy} classed={p_classed}"
+    )
+    assert p_legacy > 0.3, (
+        f"legacy classifier should be inconclusive (P(success) > 0.3) on a "
+        f"never-seen fp8 variant — got {p_legacy}; if this drops, the "
+        f"counterfactual is no longer demonstrating the T-26 problem"
+    )
+    assert p_classed < 0.2, (
+        f"class-aware classifier should solidly predict failure: got {p_classed}"
+    )
+
+
 def test_distance_floor_prevents_division_blowup() -> None:
     """Exact-match neighbor mustn't produce infinite weight."""
     m = FeasibilityModel(k=2, min_observations=2, distance_floor=1e-6)

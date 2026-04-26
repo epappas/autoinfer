@@ -131,8 +131,14 @@ def _build_l1_spec(
         dataset_name=cfg.harness.driver.dataset_name,
         num_prompts=cfg.harness.driver.num_prompts,
     )
+    from autoinfer.layers.l1_engine import derive_knob_classes
+
     surrogate = _build_surrogate(
-        cfg, surface=adapter.surface(), objective_axis="tokens_per_sec", maximize=True,
+        cfg,
+        surface=adapter.surface(),
+        objective_axis="tokens_per_sec",
+        maximize=True,
+        knob_classes=derive_knob_classes(catalog),
     )
     warmstart = _build_warmstart(cfg.policy.warmstart, catalog)
 
@@ -331,6 +337,7 @@ def _build_surrogate(
     surface: dict[str, Any],
     objective_axis: str,
     maximize: bool,
+    knob_classes: dict[str, dict[str, str]] | None = None,
 ) -> Surrogate:
     """Build the perf surrogate, optionally wrapped in feasibility constraint.
 
@@ -339,6 +346,10 @@ def _build_surrogate(
     from typed failures and rejects candidates whose nearest-neighbor
     history is too failure-dense (see policy/feasibility.py for the
     motivating data).
+
+    ``knob_classes`` (T-26) lets callers inject structural value-to-class
+    taxonomies — e.g. {fp8, fp8_e4m3, fp8_e5m2} as one class — so the
+    classifier generalises a single failure across the whole class.
     """
     s_cfg = cfg.policy.surrogate
     inner = OptunaSurrogate(
@@ -355,6 +366,7 @@ def _build_surrogate(
         feasibility=FeasibilityModel(
             k=s_cfg.feasibility_k,
             min_observations=s_cfg.feasibility_min_observations,
+            knob_classes=knob_classes or {},
         ),
         threshold=s_cfg.feasibility_threshold,
         max_resamples=s_cfg.feasibility_max_resamples,
