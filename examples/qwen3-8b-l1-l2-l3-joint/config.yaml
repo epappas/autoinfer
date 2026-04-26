@@ -108,8 +108,11 @@ layers:
   l1_engine:
     model: Qwen/Qwen3-8B
     knobs_path: src/autoinfer/layers/l1_engine/knobs.yaml
-    max_trials: 10
-    reserve_cap: 4
+    # 14 base + 6 reserve: gives the failure-aware surrogate room to
+    # exercise its KDE *and* leaves runway for a 2nd-pass after L2
+    # stale-fires. See campaign 01 doc Q2/Q3.
+    max_trials: 14
+    reserve_cap: 6
     candidate_port: 8000
     startup_timeout_s: 600
   l2_topology:
@@ -131,11 +134,14 @@ layers:
     # development without a GPU but Pareto-ineligible for the joint
     # frontier.
     mode: vllm
-    # L3 trials in vllm mode are expensive (~3-5 min each, comparable
-    # to L1) because every trial spawns a patched vLLM and runs the
-    # full bench + gate. Smaller budget than the cpu mode's 12.
-    max_trials: 6
-    reserve_cap: 0
+    # 12 base + 2 reserve: more L3 attempts increase the chance of
+    # seeing novel-vs-reference variance (smoke 4 had only 2 KEPT L3
+    # trials, not enough signal for Q1). Reserve cap lets L3 re-explore
+    # if a deeper layer ever invalidates above (currently it's the
+    # deepest layer so reserve only fires from operator stalls).
+    # See campaign 01 doc Q1.
+    max_trials: 12
+    reserve_cap: 2
     atol: 1e-3
     rtol: 1e-3
     perf_repeats: 5

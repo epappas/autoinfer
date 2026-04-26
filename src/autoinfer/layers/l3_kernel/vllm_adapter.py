@@ -69,6 +69,32 @@ from autoinfer.layers.l3_kernel.surface import (
 )
 
 
+def _kernel_source_metadata(target_op: str, source: str) -> dict[str, float]:
+    """Compute (sha-prefix, is_reference) for the LLM-proposed source.
+
+    Both go into Measurement.extra so post-run analysis can group
+    LLM-novel trials vs reference-fallback trials without re-hashing
+    the source string. Closes TODO T-02.
+
+    Returns a dict of float-typed values because Measurement.extra
+    is ``dict[str, float]``. The sha prefix is encoded as the integer
+    of its first 12 hex chars; is_reference is 0.0 or 1.0.
+    """
+    import hashlib
+
+    sha = hashlib.sha256(source.encode("utf-8")).hexdigest()[:12]
+    ref_entry, ref_source = REFERENCE_SOURCES.get(target_op, ("", ""))
+    ref_sha = (
+        hashlib.sha256(ref_source.encode("utf-8")).hexdigest()[:12]
+        if ref_source
+        else ""
+    )
+    return {
+        "kernel_source_sha_int": float(int(sha, 16)),
+        "kernel_is_reference": 1.0 if sha == ref_sha else 0.0,
+    }
+
+
 @dataclass
 class L3VllmKernelAdapter:
     """L3 adapter that ships kernels into vLLM and measures end-to-end.
@@ -116,6 +142,8 @@ class L3VllmKernelAdapter:
     _wrapper_stdout_path: Path | None = field(default=None, init=False, repr=False)
     _wrapper_stderr_path: Path | None = field(default=None, init=False, repr=False)
     _current_trial_id: str | None = field(default=None, init=False, repr=False)
+    _current_target_op: str | None = field(default=None, init=False, repr=False)
+    _current_source: str | None = field(default=None, init=False, repr=False)
 
     def surface(self) -> dict[str, Any]:
         return to_surrogate_surface(self.catalog)
@@ -190,6 +218,8 @@ class L3VllmKernelAdapter:
         # Build the injection plan + wrapper script + spawn vLLM.
         plan = InjectionPlan(target_op=target_op, entry_fn=str(entry_fn), source=str(source))
         self._current_trial_id = trial.trial_id
+        self._current_target_op = target_op
+        self._current_source = str(source)
         try:
             self._start_patched_vllm(plan)
         except Exception as e:  # noqa: BLE001
@@ -288,19 +318,26 @@ class L3VllmKernelAdapter:
                 f"gate rejected mean_kl={gate.mean_kl:.4f} invariant={gate.batch_invariant}",
             )
         peak_hbm = _query_gpu_memory_gb(self.gpu_device_id) or 0.0
+        extra = {
+            "max_abs_err": max_abs_err,
+            "ttft_p50_ms": driver.ttft_ms.get("p50", 0.0),
+            "tpot_p50_ms": driver.tpot_ms.get("p50", 0.0),
+            "goodput": driver.goodput_req_per_sec,
+            "max_kl_observed": gate.max_kl,
+        }
+        # T-02: record kernel-source provenance so post-run analysis
+        # can group LLM-novel vs reference-fallback trials without
+        # re-hashing the source string from the trial JSON config.
+        extra.update(
+            _kernel_source_metadata(self._current_target_op or "", self._current_source or "")
+        )
         meas = Measurement(
             tokens_per_sec=driver.tokens_per_sec,
             ttft_p99_ms=driver.ttft_ms.get("p99", 0.0),
             tpot_p99_ms=driver.tpot_ms.get("p99", 0.0),
             peak_hbm_gb=peak_hbm,
             kl_divergence=gate.mean_kl,
-            extra={
-                "max_abs_err": max_abs_err,
-                "ttft_p50_ms": driver.ttft_ms.get("p50", 0.0),
-                "tpot_p50_ms": driver.tpot_ms.get("p50", 0.0),
-                "goodput": driver.goodput_req_per_sec,
-                "max_kl_observed": gate.max_kl,
-            },
+            extra=extra,
         )
         # End-to-end serving measurement IS unit-comparable to L1/L2.
         return TrialOutput(measurement=meas, failure=None, pareto_eligible=True)
@@ -422,6 +459,8 @@ class L3VllmKernelAdapter:
                 self._wrapper_path.unlink(missing_ok=True)
             self._wrapper_path = None
         self._current_trial_id = None
+        self._current_target_op = None
+        self._current_source = None
 
     def _fail(self, trial: TrialInput, kind: FailureKind, msg: str) -> TrialOutput:
         # Clip at 4000 chars (vs 500 in L1/L2) so the full vLLM startup

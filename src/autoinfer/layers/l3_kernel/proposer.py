@@ -184,6 +184,18 @@ class KernelProposer:
         text = self.llm.complete(prompt)
         blocks = parse_kernel_blocks(text)
         if not blocks and self.fallback_when_empty:
+            # Telemetry: the runner / campaign-runner captures stdout
+            # so this marker shows up in basilica logs and the per-trial
+            # vllm.out file alongside the [autoinfer.l3.injector] line.
+            # Without it, "LLM never generated a novel kernel" looks
+            # identical to "LLM generated and matched reference" in
+            # post-run analysis.
+            print(
+                f"[autoinfer.l3.proposer] fallback to reference seeds "
+                f"(LLM returned no parseable blocks; first 200 chars: "
+                f"{text[:200]!r})",
+                flush=True,
+            )
             from autoinfer.layers.l3_kernel.surface import reference_seed_configs
 
             return reference_seed_configs()[:n]

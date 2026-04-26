@@ -19,10 +19,8 @@ Bands by priority:
 
 ### P0 — blocks next campaign
 
-| ID | Item | Why it blocks | Reference |
-|---|---|---|---|
-| T-01 | Verify KernelProposer fired with novel source in smoke 4 (vs falling back to reference seeds) | If the LLM never actually generated a kernel, the "kernel-into-vLLM works" result is a stub and the planned campaign tests nothing useful | smoke `8924421` artifacts in `docs/research/raw/smoke_l3vllm_validated-2026-04-26/` |
-| T-02 | KernelProposer fallback event-emit + kernel-source-hash on every L3 trial | Post-run analysis can't currently distinguish "LLM generated" from "fallback to reference" trials. Without this, novel-vs-reference comparisons are guesswork | `proposer.py:fallback_when_empty` |
+(none currently open — T-01, T-02, T-17 closed in pre-flight for
+campaign 01)
 
 ### P1 — corner-cuts; must fix before article
 
@@ -35,7 +33,6 @@ Bands by priority:
 | T-14 | `reserve_cap=4` picked arbitrarily, not informed by data | No principled argument for 4 vs 2 vs 8. Should be informed by observed surrogate-improvement rate per re-explored trial after a few campaigns generate data | `controller/stale.py:LayerSpec.reserve_cap` |
 | T-15 | Hardware notes hand-authored as prose (FP8-on-A100, chunked_prefill rules) | Exactly the manual-rule-authoring anti-pattern that the FeasibilityModel was built to retire. Once the classifier accumulates ~50 trials of failure data, the prose notes should be progressively trimmed and the data-driven path validated end-to-end | `examples/qwen3-8b-l1-l2-l3-joint/config.yaml` `hardware_notes:` |
 | T-16 | `OptunaSurrogate._penalty_for_failure` ignores FailureKind | All typed failures earn the same scalar penalty. The `ConstrainedOptunaSurrogate` uses FailureKind via the FeasibilityModel, but the perf model still treats OOM and QUALITY_KL as identical signals to TPE's KDE | `policy/surrogate.py:_penalty_for_failure` |
-| T-17 | `KernelProposer.fallback_when_empty=True` silently uses reference seeds when LLM output is unparseable | Hides LLM-side failures from telemetry. Should event-emit a `kernel_proposer_fallback` event on every fallback so artifacts make this visible | `layers/l3_kernel/proposer.py` |
 
 ### P2 — research extensions
 
@@ -52,6 +49,8 @@ Bands by priority:
 
 ## Closed
 
-| ID | Item | Closed by |
-|---|---|---|
-| (closed items added per commit; first iteration of this file ships with no closed items so the open list is the canonical view) | | |
+| ID | Item | Closed by | Notes |
+|---|---|---|---|
+| T-01 | Verify smoke 4 KernelProposer used novel source | (this commit) | Audit confirmed: smoke 4 sources sha `034fc4b4...` (rmsnorm) and `d1407aa1...` (silu_mul) differ from reference shas `3e8a82bf...` and `69cf8186...`. Both sources contain `@triton.jit` decorators with names `*_triton_kernel`. The LLM proposer IS generating Triton source. |
+| T-02 | Kernel source hash on every L3 trial Measurement | (this commit) | `_kernel_source_metadata()` in `layers/l3_kernel/vllm_adapter.py` + same in standalone `adapter.py`. Records `kernel_source_sha_int` (int of first 12 hex chars) and `kernel_is_reference` (1.0/0.0) in `Measurement.extra` so post-run analysis can group novel vs fallback. |
+| T-17 | KernelProposer fallback transparency | (this commit) | `[autoinfer.l3.proposer] fallback to reference seeds` marker prints to stdout when LLM returns unparseable blocks; captured in basilica logs + per-trial `_vllm.out` files alongside the injector's `[autoinfer.l3.injector]` marker. |

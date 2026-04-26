@@ -103,13 +103,28 @@ class L3KernelAdapter:
         except Exception as e:  # noqa: BLE001
             return self._failure(trial, FailureKind.HANG, f"candidate raised during perf: {e}")
 
+        # T-02: kernel-source provenance so post-run analysis can group
+        # LLM-novel vs reference-fallback trials. Same metadata as the
+        # vLLM adapter so analyzers don't branch on adapter type.
+        import hashlib
+
+        source_str = str(source) if source is not None else ""
+        sha = hashlib.sha256(source_str.encode("utf-8")).hexdigest()[:12]
+        ref_entry, ref_source = REFERENCE_SOURCES.get(target_op, ("", ""))
+        ref_sha = hashlib.sha256(ref_source.encode("utf-8")).hexdigest()[:12] if ref_source else ""
+        extra: dict[str, float] = {
+            "max_abs_err": max_abs_err,
+            "n_shapes": float(len(shapes)),
+            "kernel_source_sha_int": float(int(sha, 16)),
+            "kernel_is_reference": 1.0 if sha == ref_sha else 0.0,
+        }
         meas = Measurement(
             tokens_per_sec=ops_per_sec,
             ttft_p99_ms=0.0,
             tpot_p99_ms=0.0,
             peak_hbm_gb=0.0,
             kl_divergence=0.0,
-            extra={"max_abs_err": max_abs_err, "n_shapes": float(len(shapes))},
+            extra=extra,
         )
         # Kernel ops/sec is not unit-comparable to L1/L2 end-to-end token
         # throughput. Mark ineligible for the joint Pareto until proper
