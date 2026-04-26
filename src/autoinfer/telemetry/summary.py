@@ -161,6 +161,22 @@ def write_results_tsv(path: Path, entries: list[Entry]) -> None:
             w.writerow(row)
 
 
+def _entry_summary(e: Entry) -> dict[str, Any]:
+    """Compact single-entry view for inclusion in run_summary.json."""
+    if e.measurement is None:
+        return {"trial_id": e.trial_id, "layer": e.layer, "config": e.config}
+    return {
+        "trial_id": e.trial_id,
+        "layer": e.layer,
+        "config": e.config,
+        "tokens_per_sec": e.measurement.tokens_per_sec,
+        "tpot_p99_ms": e.measurement.tpot_p99_ms,
+        "ttft_p99_ms": e.measurement.ttft_p99_ms,
+        "kl_divergence": e.measurement.kl_divergence,
+        "peak_hbm_gb": e.measurement.peak_hbm_gb,
+    }
+
+
 def build_run_summary(
     run_id: str,
     entries: list[Entry],
@@ -184,23 +200,41 @@ def build_run_summary(
     if kept:
         best = max(kept, key=lambda e: e.measurement.tokens_per_sec if e.measurement else 0)
         if best.measurement:
-            top = {
-                "trial_id": best.trial_id,
-                "config": best.config,
-                "tokens_per_sec": best.measurement.tokens_per_sec,
-                "tpot_p99_ms": best.measurement.tpot_p99_ms,
-                "ttft_p99_ms": best.measurement.ttft_p99_ms,
-                "kl_divergence": best.measurement.kl_divergence,
-            }
+            top = _entry_summary(best)
+
+    # T-22: per-layer best in run_summary so downstream tools (plots,
+    # articles, the analyzer) can read per-layer winners without
+    # re-loading every trial JSON. Joint Pareto stays as-is — that's
+    # the unit-comparable frontier.
+    by_layer_best: dict[str, dict[str, Any]] = {}
+    layer_kept: dict[str, list[Entry]] = {}
+    for e in kept:
+        layer_kept.setdefault(e.layer, []).append(e)
+    for layer, ents in layer_kept.items():
+        best = max(ents, key=lambda e: e.measurement.tokens_per_sec if e.measurement else 0)
+        if best.measurement:
+            by_layer_best[layer] = _entry_summary(best)
+
+    pareto_serialised = [_entry_summary(e) for e in pareto]
+
+    n_kept_by_layer = {layer: len(ents) for layer, ents in layer_kept.items()}
+    n_failed_by_layer: dict[str, int] = {}
+    for e in failed:
+        n_failed_by_layer[e.layer] = n_failed_by_layer.get(e.layer, 0) + 1
+
     return {
         "run_id": run_id,
         "elapsed_s": elapsed_s,
         "n_trials": len(entries),
         "n_kept": len(kept),
         "n_failed": len(failed),
+        "n_kept_by_layer": n_kept_by_layer,
+        "n_failed_by_layer": n_failed_by_layer,
         "failures_by_kind": by_kind,
         "phase_counts": phase_counts,
         "pareto_size": len(pareto),
+        "pareto_frontier": pareto_serialised,
+        "best_by_layer": by_layer_best,
         "top_by_tokens_per_sec": top,
         "hw_context": hw_context,
     }
