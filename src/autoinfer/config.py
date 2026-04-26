@@ -212,6 +212,18 @@ class L3KernelConfig(_Base):
             "canonical model + port prefix when mode='vllm'."
         ),
     )
+    paired_control: bool = Field(
+        default=False,
+        description=(
+            "T-27. When True, the L3 warmstart emits interleaved "
+            "(reference, llm-novel) pairs at identical "
+            "(target_op, dtype, shape_regime) cells so each LLM-novel "
+            "kernel has a same-cell reference control to compare against. "
+            "Requires a non-deterministic warmstart provider (the LLM "
+            "must actually generate the novel half of each pair). "
+            "Default False to keep existing campaigns reproducible."
+        ),
+    )
 
 
 class LayersConfig(_Base):

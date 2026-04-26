@@ -280,21 +280,42 @@ def _build_l3_spec(
     seeds = reference_seed_configs()
     warmstart: ProposalLLM
     if cfg.policy.warmstart.provider == "deterministic":
+        if l3_cfg.paired_control:
+            raise ValueError(
+                "paired_control=True requires a non-deterministic warmstart "
+                "provider (the LLM must generate the novel half of each "
+                "pair); got provider='deterministic'"
+            )
         warmstart = _build_warmstart_with_seeds(cfg.policy.warmstart, seeds)
     else:
-        # LLM-driven kernel proposer: wraps the underlying chat-completion
-        # client (which exposes .complete(prompt)) so L3 candidates are
-        # actual source-code proposals, not surrogate-knob picks.
+        from autoinfer.layers.l3_kernel.proposer import PairedControlProposer
+
         raw_llm = _build_warmstart_with_seeds(cfg.policy.warmstart, seeds)
-        warmstart = KernelProposer(llm=raw_llm)  # type: ignore[arg-type]
+        base_proposer = KernelProposer(llm=raw_llm)  # type: ignore[arg-type]
+        if l3_cfg.paired_control:
+            warmstart = PairedControlProposer(
+                base=base_proposer,
+                reference_seeds=seeds,
+            )
+        else:
+            warmstart = base_proposer
 
     max_trials = max_trials_override if max_trials_override is not None else l3_cfg.max_trials
+    if l3_cfg.paired_control:
+        # Pair size = 2; warmstart_n must be a multiple of 2 so each
+        # reference seed has its novel partner inside the warmstart batch.
+        warmstart_n = max(
+            2,
+            (min(cfg.policy.warmstart.n_configs, 2 * len(seeds)) // 2) * 2,
+        )
+    else:
+        warmstart_n = min(cfg.policy.warmstart.n_configs, len(seeds))
     spec = LayerSpec(
         adapter=adapter,
         surrogate=surrogate,
         warmstart=warmstart,
         max_trials=max_trials,
-        warmstart_n=min(cfg.policy.warmstart.n_configs, len(seeds)),
+        warmstart_n=warmstart_n,
         warmstart_prior=cfg.policy.warmstart.hardware_notes or "",
         reserve_cap=l3_cfg.reserve_cap,
     )
@@ -304,6 +325,7 @@ def _build_l3_spec(
         "reserve_cap": l3_cfg.reserve_cap,
         "atol": l3_cfg.atol,
         "rtol": l3_cfg.rtol,
+        "paired_control": l3_cfg.paired_control,
     }
     return "l3_kernel", spec, event
 
