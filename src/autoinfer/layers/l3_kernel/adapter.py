@@ -163,11 +163,43 @@ class L3KernelAdapter:
         shapes: tuple[Any, ...],
         dtype: torch.dtype,
     ) -> float:
-        """Best-of-K ops/sec at the largest shape in the regime."""
+        """Best-of-K ops/sec at the largest shape in the regime.
+
+        On CUDA we time with ``torch.cuda.Event`` and force sync between
+        each iteration so asynchronous kernel launches don't return
+        spurious sub-microsecond elapsed times. ``time.perf_counter``
+        without sync would measure launch-overhead only — exactly the
+        T-11 bug captured in TODO.md.
+
+        On CPU we keep the wall-clock path (sync is a no-op there
+        anyway and ``torch.cuda.Event`` requires a CUDA build at all).
+        """
         spec = shapes[-1]
         inputs = make_inputs(spec, dtype, seed=self.perf_seed)
+        use_cuda_timer = (
+            torch.cuda.is_available()
+            and any(
+                isinstance(a, torch.Tensor) and a.is_cuda for a in inputs
+            )
+        )
+        # Warmup. On CUDA, sync after warmup so the first measured run
+        # doesn't pay JIT-compile overhead from the first warmup launch.
         for _ in range(self.warmup_runs):
             candidate(*inputs)
+        if use_cuda_timer:
+            torch.cuda.synchronize()
+
+        if use_cuda_timer:
+            best = self._best_elapsed_cuda(candidate, inputs)
+        else:
+            best = self._best_elapsed_wall(candidate, inputs)
+        if best <= 0.0 or not (best < float("inf")):
+            raise RuntimeError(f"perf measurement degenerate: best={best}")
+        return 1.0 / best
+
+    def _best_elapsed_wall(
+        self, candidate: KernelCallable, inputs: tuple[Any, ...]
+    ) -> float:
         best = float("inf")
         for _ in range(self.perf_repeats):
             t0 = time.perf_counter()
@@ -175,9 +207,28 @@ class L3KernelAdapter:
             elapsed = time.perf_counter() - t0
             if elapsed < best:
                 best = elapsed
-        if best <= 0.0 or not (best < float("inf")):
-            raise RuntimeError(f"perf measurement degenerate: best={best}")
-        return 1.0 / best
+        return best
+
+    def _best_elapsed_cuda(
+        self, candidate: KernelCallable, inputs: tuple[Any, ...]
+    ) -> float:
+        """CUDA-event timing with sync — see ``_measure_perf`` docstring."""
+        # torch.cuda.Event's stubs are loose in current torch; cast to Any
+        # to keep this function strictly-typed without per-call ignores.
+        cuda_event_factory: Any = torch.cuda.Event
+        best = float("inf")
+        for _ in range(self.perf_repeats):
+            start_evt = cuda_event_factory(enable_timing=True)
+            end_evt = cuda_event_factory(enable_timing=True)
+            start_evt.record()
+            candidate(*inputs)
+            end_evt.record()
+            torch.cuda.synchronize()
+            elapsed_ms: float = start_evt.elapsed_time(end_evt)
+            elapsed = elapsed_ms / 1000.0
+            if elapsed < best:
+                best = elapsed
+        return best
 
     def _failure(self, trial: TrialInput, kind: FailureKind, msg: str) -> TrialOutput:
         return TrialOutput(

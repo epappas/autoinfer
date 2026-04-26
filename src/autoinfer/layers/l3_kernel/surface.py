@@ -111,15 +111,49 @@ def _module_imports_prefix() -> str:
     )
 
 
+_L3_TEMP_ROOT: Any = None
+
+
+def _l3_temp_root() -> Any:
+    """Process-shared temp dir for compiled candidate modules.
+
+    All compiled candidates within one process share a single
+    temporary directory; an ``atexit`` hook removes the directory
+    when the process exits. The previous implementation used
+    ``NamedTemporaryFile(delete=False)`` with no cleanup, which
+    accumulated stale ``_l3_*.py`` files in ``/tmp`` over many
+    trials (TODO T-13).
+    """
+    global _L3_TEMP_ROOT
+    if _L3_TEMP_ROOT is None:
+        import atexit
+        import shutil
+        import tempfile
+        from pathlib import Path as _Path
+
+        _L3_TEMP_ROOT = _Path(tempfile.mkdtemp(prefix="autoinfer_l3_"))
+
+        def _cleanup() -> None:
+            global _L3_TEMP_ROOT
+            if _L3_TEMP_ROOT is not None and _L3_TEMP_ROOT.exists():
+                shutil.rmtree(_L3_TEMP_ROOT, ignore_errors=True)
+            _L3_TEMP_ROOT = None
+
+        atexit.register(_cleanup)
+    return _L3_TEMP_ROOT
+
+
 def compile_candidate(source: str, entry_fn: str) -> KernelCallable:
     """Compile ``source`` into a Python module and return ``entry_fn``.
 
     Triton-decorated source (``@triton.jit``) is materialised as a real
-    .py temp file before import because Triton 3.6 requires
-    ``inspect.getsource`` to find the function — pure ``exec()`` of a
-    source string can't satisfy that. Plain-Python source uses the
-    same path (cheap and uniform) so behavior matches across Triton
-    and non-Triton candidates.
+    .py file under a process-shared temp dir before import because
+    Triton 3.6 requires ``inspect.getsource`` to find the function —
+    pure ``exec()`` of a source string can't satisfy that. The temp
+    dir lives until process exit (an ``atexit`` hook cleans it up);
+    the file CAN'T be deleted on return from this function because
+    Triton's JIT may re-read the source on first kernel launch, long
+    after compile_candidate returns.
 
     Triton compilation is lazy: ``@triton.jit`` only registers the
     kernel; the actual JIT runs on first launch with a CUDA device.
@@ -130,7 +164,6 @@ def compile_candidate(source: str, entry_fn: str) -> KernelCallable:
     ``entry_fn`` is absent or not callable.
     """
     import importlib.util
-    import tempfile
     import uuid
 
     full_source = _module_imports_prefix() + "\n" + source
@@ -139,15 +172,9 @@ def compile_candidate(source: str, entry_fn: str) -> KernelCallable:
     except SyntaxError as e:
         raise ValueError(f"candidate source has syntax error: {e}") from e
 
-    # Write to a temp .py file; never auto-delete because the JITed
-    # kernel may inspect its source on first launch (long after this
-    # function returns). Cleanup is deferred to OS temp reaping.
-    suffix = f"_l3_{uuid.uuid4().hex[:8]}.py"
-    with tempfile.NamedTemporaryFile(
-        mode="w", suffix=suffix, delete=False, encoding="utf-8",
-    ) as f:
-        f.write(full_source)
-        path = f.name
+    root = _l3_temp_root()
+    path = root / f"l3_candidate_{uuid.uuid4().hex[:8]}.py"
+    path.write_text(full_source, encoding="utf-8")
 
     spec = importlib.util.spec_from_file_location(
         f"l3_candidate_{uuid.uuid4().hex[:8]}", path,

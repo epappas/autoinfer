@@ -84,6 +84,23 @@ def test_make_inputs_rope_shapes() -> None:
     assert sin.shape == cos.shape
 
 
+def test_compile_candidate_uses_shared_temp_dir() -> None:
+    """T-13: all compiled candidates share one process-level temp dir;
+    new candidates don't accumulate distinct directories."""
+    from autoinfer.layers.l3_kernel.surface import _l3_temp_root
+
+    entry_a, src_a = REFERENCE_SOURCES["rmsnorm"]
+    entry_b, src_b = REFERENCE_SOURCES["silu_mul"]
+    compile_candidate(src_a, entry_a)
+    root1 = _l3_temp_root()
+    compile_candidate(src_b, entry_b)
+    root2 = _l3_temp_root()
+    assert root1 is root2, "compile_candidate should reuse a single temp dir"
+    assert root1.exists()
+    files = sorted(root1.glob("l3_candidate_*.py"))
+    assert len(files) >= 2
+
+
 def test_compile_candidate_returns_callable() -> None:
     entry, src = REFERENCE_SOURCES["rmsnorm"]
     fn = compile_candidate(src, entry)
