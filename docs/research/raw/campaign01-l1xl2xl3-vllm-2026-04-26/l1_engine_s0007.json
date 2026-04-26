@@ -1,0 +1,26 @@
+{
+  "config": {
+    "attention_backend": "TRITON_ATTN",
+    "block_size": 32,
+    "dtype": "float16",
+    "enable_chunked_prefill": false,
+    "enable_prefix_caching": true,
+    "gpu_memory_utilization": 0.8863919743334269,
+    "kv_cache_dtype": "auto",
+    "max_num_batched_tokens": 8192,
+    "max_num_seqs": 256,
+    "quantization": "none"
+  },
+  "failure": {
+    "kind": "startup",
+    "layer": "l1_engine",
+    "message": "config violates 1 constraint(s): chunked_prefill_batched_tokens_bound",
+    "metadata": {},
+    "trial_id": "l1_engine_s0007"
+  },
+  "layer": "l1_engine",
+  "measurement": null,
+  "pareto_eligible": true,
+  "stale": true,
+  "trial_id": "l1_engine_s0007"
+}

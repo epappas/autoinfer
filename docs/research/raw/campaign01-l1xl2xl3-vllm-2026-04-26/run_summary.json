@@ -1,0 +1,60 @@
+{
+  "elapsed_s": 6906.109015691007,
+  "failures_by_kind": {
+    "quality_kl": 1,
+    "startup": 17
+  },
+  "hw_context": {
+    "autoinfer_version": "0.1.0",
+    "env": {
+      "CUDA_VISIBLE_DEVICES": "0"
+    },
+    "git_sha": "a4cf34e4bd1519f337e5a9208d0481e43f33d12b",
+    "gpus": [
+      {
+        "compute_cap": "8.9",
+        "driver": "580.126.16",
+        "index": "0",
+        "memory_total_mib": "46068",
+        "memory_used_mib": "505",
+        "name": "NVIDIA L40S"
+      },
+      {
+        "compute_cap": "8.9",
+        "driver": "580.126.16",
+        "index": "1",
+        "memory_total_mib": "46068",
+        "memory_used_mib": "39273",
+        "name": "NVIDIA L40S"
+      }
+    ],
+    "platform": "Linux-6.17.0-14-generic-x86_64-with-glibc2.35",
+    "python": "3.11.9",
+    "torch_version": "2.10.0",
+    "vllm_version": "0.19.1"
+  },
+  "n_failed": 18,
+  "n_kept": 14,
+  "n_trials": 36,
+  "pareto_size": 1,
+  "phase_counts": {
+    "operator": 6,
+    "surrogate": 19,
+    "warmstart": 11
+  },
+  "run_id": "6fb695a9b158",
+  "top_by_tokens_per_sec": {
+    "config": {
+      "dtype": "bfloat16",
+      "enforce_eager": true,
+      "gpu_count": 1,
+      "gpu_memory_utilization": 0.85,
+      "gpu_type": "H100"
+    },
+    "kl_divergence": 1.8724352844590761,
+    "tokens_per_sec": 757.6150434235644,
+    "tpot_p99_ms": 17.412834839584924,
+    "trial_id": "l2_topology_w0001",
+    "ttft_p99_ms": 6607.939342505124
+  }
+}

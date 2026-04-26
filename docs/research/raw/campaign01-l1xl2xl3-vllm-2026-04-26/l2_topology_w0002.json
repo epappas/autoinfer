@@ -1,0 +1,21 @@
+{
+  "config": {
+    "dtype": "float16",
+    "enforce_eager": false,
+    "gpu_count": 2,
+    "gpu_memory_utilization": 0.88,
+    "gpu_type": "RTX A6000"
+  },
+  "failure": {
+    "kind": "startup",
+    "layer": "l2_topology",
+    "message": "deploy_vllm: [TIMEOUT] Deployment '0a3e6cf5-f1a3-4459-81cf-7b0d925ea5bd' not ready after 2100s (state: Active, replicas: 0/0)",
+    "metadata": {},
+    "trial_id": "l2_topology_w0002"
+  },
+  "layer": "l2_topology",
+  "measurement": null,
+  "pareto_eligible": true,
+  "stale": false,
+  "trial_id": "l2_topology_w0002"
+}

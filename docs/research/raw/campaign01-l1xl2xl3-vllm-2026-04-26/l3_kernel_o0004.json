@@ -1,0 +1,28 @@
+{
+  "config": {
+    "dtype": "bfloat16",
+    "shape_regime": "medium",
+    "target_op": "rmsnorm"
+  },
+  "failure": null,
+  "layer": "l3_kernel",
+  "measurement": {
+    "extra": {
+      "goodput": 2.8998931289027072,
+      "kernel_is_reference": 1.0,
+      "kernel_source_sha_int": 68764619999949.0,
+      "max_abs_err": 0.0,
+      "max_kl_observed": 12.228865631138401,
+      "tpot_p50_ms": 31.828245981159853,
+      "ttft_p50_ms": 1196.1971130076563
+    },
+    "kl_divergence": 1.7110719993925252,
+    "peak_hbm_gb": 41.48828125,
+    "tokens_per_sec": 615.1851407986259,
+    "tpot_p99_ms": 149.40404963466182,
+    "ttft_p99_ms": 1752.3305118625285
+  },
+  "pareto_eligible": true,
+  "stale": false,
+  "trial_id": "l3_kernel_o0004"
+}

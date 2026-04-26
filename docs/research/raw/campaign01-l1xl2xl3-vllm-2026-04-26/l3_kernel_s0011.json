@@ -1,0 +1,19 @@
+{
+  "config": {
+    "dtype": "float16",
+    "shape_regime": "large",
+    "target_op": "rope"
+  },
+  "failure": {
+    "kind": "startup",
+    "layer": "l3_kernel",
+    "message": "target_op 'rope' not supported by vLLM injector (supported: ['rmsnorm', 'silu_mul'])",
+    "metadata": {},
+    "trial_id": "l3_kernel_s0011"
+  },
+  "layer": "l3_kernel",
+  "measurement": null,
+  "pareto_eligible": true,
+  "stale": false,
+  "trial_id": "l3_kernel_s0011"
+}

@@ -22,6 +22,13 @@ Bands by priority:
 (none currently open — T-01, T-02, T-17 closed in pre-flight for
 campaign 01)
 
+### P0 — blocks next campaign
+
+| ID | Item | Why it blocks | Reference |
+|---|---|---|---|
+| T-26 | FeasibilityModel feature engineering: knob-class one-hot for "fp8 variants" / "Hopper-only KV" / "attention-backend × KV-format compat" | Campaign 01 showed the classifier with uniform per-knob distance can't extract structural rules — L1 surrogate kept-rate stuck at 1/12 even after the FP8 region had 4-6 failures in history. Without this Q2 stays partial and Q3 can't fire. | `policy/feasibility.py` |
+| T-27 | Same-config L3 control trials: pin (op, regime, dtype, hardware) and run reference + novel back-to-back | Campaign 01's 2 LLM-novel trials weren't at the same cells as the reference trials, so no honest A/B. The "novel beats reference" Q1 question can't be answered without paired controls. | `examples/qwen3-8b-l1-l2-l3-joint/config.yaml` warmstart strategy |
+
 ### P1 — corner-cuts; must fix before article
 
 | ID | Item | Why it matters | Reference |
@@ -37,7 +44,7 @@ campaign 01)
 | ID | Item | Description | Reference |
 |---|---|---|---|
 | T-20 | RoPE support in injector | vLLM's `RotaryEmbedding` API has many shape-varying paths (positions, query/key fused, kv-cache aware). v1 injector explicitly skips it; v2 needs to either fan out per shape variant or accept a kernel signature richer than the rmsnorm/silu_mul cases | `layers/l3_kernel/injector.py:_TARGET_BINDINGS` |
-| T-21 | Attention-layer injector | RMSNorm and SiluAndMul are tiny fractions of total compute. Attention is the real bottleneck. Injecting LLM-proposed attention kernels (FLASHINFER/FLASH_ATTN replacements) is where end-to-end wins live | not started |
+| T-21 | Attention-layer injector (**escalated from P2 → P1 after campaign 01**) | RMSNorm + SiluAndMul are tiny fractions of total compute on Qwen3-8B; campaign 01 confirmed all L3 KEPT trials cluster in 515-621 tok/s regardless of LLM-novel-vs-reference. The actual kernel-level wins live in attention — without an attention injector, L3 can't show end-to-end wins on this model | not started |
 | T-23 | L2 `peak_hbm_gb` reads campaign-container nvidia-smi for remote candidates | The L2 adapter reports local GPU memory even when the candidate is on a remote H100. Real per-trial HBM needs to be queried inside the remote deployment | `layers/l2_topology/adapter.py` |
 | T-24 | Stale Basilica deployments from prior sessions | 11 deployments going back to 2026-03-16 listed during the first joint campaign. May be the user's other projects; not deleted unilaterally. Needs user triage | flagged in joint-run analyses |
 
@@ -54,3 +61,4 @@ campaign 01)
 | T-13 | `compile_candidate` temp-file leak | (this commit) | `_l3_temp_root()` returns a process-shared temp dir created on first use; `atexit.register` deletes it on process exit. All compiled candidates write into this shared dir, so `/tmp` no longer accumulates stale `_l3_*.py` files across trials. Test added in `test_l3_surface.py` to pin the shared-dir behavior. |
 | T-22 | per-layer Pareto + best in `run_summary.json` | (this commit) | Adds `best_by_layer`, `pareto_frontier` (serialised), `n_kept_by_layer`, `n_failed_by_layer` to the summary so downstream tools (plots, articles, the analyzer) read these directly without re-loading trial JSONs. 2 unit tests pin the structure. |
 | T-25 | Per-prompt KL distribution shape in trial JSON | (this commit) | `_kl_percentiles` adds `kl_min`, `kl_p50`, `kl_p90`, `kl_p95`, `kl_p99` to `Measurement.extra` for both L1 (compose_measurement) and L3-vLLM. Lets post-run analysis distinguish "low-mean, no outliers" from "low-mean, one bad prompt" — the gate's scalar masks the latter. |
+| Campaign 01 | Full L1×L2×L3 with mode='vllm', constrained surrogate, kernel-source telemetry — first production run of the full stack | run completed `a4cf34e..`; results at `docs/research/references/11-campaign01-results.md` | 36 trials in 115 min, ~$15-20. L2 H100 wins joint Pareto (757.6 tok/s, 17.4ms TPOT). Q1 inconclusive at rmsnorm/silu_mul surface (Outcome B); Q2 partial (8% vs 0% baseline); Q3 negative (gated by Q2). Opened T-26, T-27; escalated T-21. |
