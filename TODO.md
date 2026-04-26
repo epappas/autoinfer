@@ -40,7 +40,6 @@ campaign 01)
 | T-21 | Attention-layer injector | RMSNorm and SiluAndMul are tiny fractions of total compute. Attention is the real bottleneck. Injecting LLM-proposed attention kernels (FLASHINFER/FLASH_ATTN replacements) is where end-to-end wins live | not started |
 | T-23 | L2 `peak_hbm_gb` reads campaign-container nvidia-smi for remote candidates | The L2 adapter reports local GPU memory even when the candidate is on a remote H100. Real per-trial HBM needs to be queried inside the remote deployment | `layers/l2_topology/adapter.py` |
 | T-24 | Stale Basilica deployments from prior sessions | 11 deployments going back to 2026-03-16 listed during the first joint campaign. May be the user's other projects; not deleted unilaterally. Needs user triage | flagged in joint-run analyses |
-| T-25 | Per-trial gate KL distribution captured to artifact | Currently only mean / max land in the trial JSON's `extra`. Full per-prompt KL histogram would let post-hoc analyses identify quality drift patterns the gate scalar masks | `harness/gate.py:GateResult` |
 
 ---
 
@@ -54,3 +53,4 @@ campaign 01)
 | T-11 | L3 standalone perf timing uses `time.perf_counter` without `torch.cuda.synchronize()` | (this commit) | `_best_elapsed_cuda` uses `torch.cuda.Event` + `synchronize()` when inputs are CUDA tensors; `_best_elapsed_wall` keeps the wall-clock path for CPU. The vLLM-mode L3 adapter uses `vllm bench serve` which has its own correct timing — this fix matters for the standalone L3 path used in dev workflows and on a real GPU. |
 | T-13 | `compile_candidate` temp-file leak | (this commit) | `_l3_temp_root()` returns a process-shared temp dir created on first use; `atexit.register` deletes it on process exit. All compiled candidates write into this shared dir, so `/tmp` no longer accumulates stale `_l3_*.py` files across trials. Test added in `test_l3_surface.py` to pin the shared-dir behavior. |
 | T-22 | per-layer Pareto + best in `run_summary.json` | (this commit) | Adds `best_by_layer`, `pareto_frontier` (serialised), `n_kept_by_layer`, `n_failed_by_layer` to the summary so downstream tools (plots, articles, the analyzer) read these directly without re-loading trial JSONs. 2 unit tests pin the structure. |
+| T-25 | Per-prompt KL distribution shape in trial JSON | (this commit) | `_kl_percentiles` adds `kl_min`, `kl_p50`, `kl_p90`, `kl_p95`, `kl_p99` to `Measurement.extra` for both L1 (compose_measurement) and L3-vLLM. Lets post-run analysis distinguish "low-mean, no outliers" from "low-mean, one bad prompt" — the gate's scalar masks the latter. |

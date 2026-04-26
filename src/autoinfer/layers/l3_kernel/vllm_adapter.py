@@ -331,6 +331,11 @@ class L3VllmKernelAdapter:
         extra.update(
             _kernel_source_metadata(self._current_target_op or "", self._current_source or "")
         )
+        # T-25: per-prompt KL distribution shape (mean alone hides
+        # outliers; kl_p99 reveals "one prompt scored very high").
+        from autoinfer.layers.l1_engine.adapter import _kl_percentiles
+
+        extra.update(_kl_percentiles(gate.per_prompt_kl))
         meas = Measurement(
             tokens_per_sec=driver.tokens_per_sec,
             ttft_p99_ms=driver.ttft_ms.get("p99", 0.0),

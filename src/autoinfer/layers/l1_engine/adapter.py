@@ -54,22 +54,51 @@ def query_gpu_memory_used_gb(device_id: int = 0, timeout_s: float = 3.0) -> floa
         return None
 
 
+def _kl_percentiles(per_prompt_kl: tuple[float, ...]) -> dict[str, float]:
+    """Per-prompt KL distribution shape — addresses TODO T-25.
+
+    Trial JSON's ``Measurement.extra`` is ``dict[str, float]`` so we
+    can't pack the full per-prompt list there; percentiles capture the
+    distribution shape without bloating the artifact. Useful for
+    post-hoc analysis: a kept trial with mean_kl=2.0 but kl_p99=12 is
+    different from a trial with mean_kl=2.0 and kl_p99=2.5.
+    """
+    if not per_prompt_kl:
+        return {}
+    sorted_kl = sorted(per_prompt_kl)
+    n = len(sorted_kl)
+
+    def pct(p: float) -> float:
+        idx = min(n - 1, max(0, int(p * n)))
+        return sorted_kl[idx]
+
+    return {
+        "kl_min": sorted_kl[0],
+        "kl_p50": pct(0.50),
+        "kl_p90": pct(0.90),
+        "kl_p95": pct(0.95),
+        "kl_p99": pct(0.99),
+    }
+
+
 def compose_measurement(
     driver: DriverResult, gate: GateResult, peak_hbm_gb: float
 ) -> Measurement:
     """Build a ``Measurement`` from driver + gate results. Pure."""
+    extra = {
+        "ttft_p50_ms": driver.ttft_ms.get("p50", 0.0),
+        "tpot_p50_ms": driver.tpot_ms.get("p50", 0.0),
+        "goodput": driver.goodput_req_per_sec,
+        "max_kl": gate.max_kl,
+    }
+    extra.update(_kl_percentiles(gate.per_prompt_kl))
     return Measurement(
         tokens_per_sec=driver.tokens_per_sec,
         ttft_p99_ms=driver.ttft_ms.get("p99", 0.0),
         tpot_p99_ms=driver.tpot_ms.get("p99", 0.0),
         peak_hbm_gb=peak_hbm_gb,
         kl_divergence=gate.mean_kl,
-        extra={
-            "ttft_p50_ms": driver.ttft_ms.get("p50", 0.0),
-            "tpot_p50_ms": driver.tpot_ms.get("p50", 0.0),
-            "goodput": driver.goodput_req_per_sec,
-            "max_kl": gate.max_kl,
-        },
+        extra=extra,
     )
 
 
