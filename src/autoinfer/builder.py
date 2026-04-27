@@ -131,8 +131,14 @@ def _build_l1_spec(
         dataset_name=cfg.harness.driver.dataset_name,
         num_prompts=cfg.harness.driver.num_prompts,
     )
+    from autoinfer.layers.l1_engine import derive_knob_classes
+
     surrogate = _build_surrogate(
-        cfg, surface=adapter.surface(), objective_axis="tokens_per_sec", maximize=True,
+        cfg,
+        surface=adapter.surface(),
+        objective_axis="tokens_per_sec",
+        maximize=True,
+        knob_classes=derive_knob_classes(catalog),
     )
     warmstart = _build_warmstart(cfg.policy.warmstart, catalog)
 
@@ -271,24 +277,52 @@ def _build_l3_spec(
     surrogate = _build_surrogate(
         cfg, surface=adapter.surface(), objective_axis="tokens_per_sec", maximize=True,
     )
-    seeds = reference_seed_configs()
+    if l3_cfg.paired_control:
+        from autoinfer.layers.l3_kernel import paired_control_seed_configs
+
+        seeds = paired_control_seed_configs()
+    else:
+        seeds = reference_seed_configs()
     warmstart: ProposalLLM
     if cfg.policy.warmstart.provider == "deterministic":
+        if l3_cfg.paired_control:
+            raise ValueError(
+                "paired_control=True requires a non-deterministic warmstart "
+                "provider (the LLM must generate the novel half of each "
+                "pair); got provider='deterministic'"
+            )
         warmstart = _build_warmstart_with_seeds(cfg.policy.warmstart, seeds)
     else:
-        # LLM-driven kernel proposer: wraps the underlying chat-completion
-        # client (which exposes .complete(prompt)) so L3 candidates are
-        # actual source-code proposals, not surrogate-knob picks.
+        from autoinfer.layers.l3_kernel.proposer import PairedControlProposer
+
         raw_llm = _build_warmstart_with_seeds(cfg.policy.warmstart, seeds)
-        warmstart = KernelProposer(llm=raw_llm)  # type: ignore[arg-type]
+        base_proposer = KernelProposer(llm=raw_llm)  # type: ignore[arg-type]
+        if l3_cfg.paired_control:
+            warmstart = PairedControlProposer(
+                base=base_proposer,
+                reference_seeds=seeds,
+            )
+        else:
+            warmstart = base_proposer
 
     max_trials = max_trials_override if max_trials_override is not None else l3_cfg.max_trials
+    base_n = (
+        l3_cfg.warmstart_n
+        if l3_cfg.warmstart_n is not None
+        else cfg.policy.warmstart.n_configs
+    )
+    if l3_cfg.paired_control:
+        # Pair size = 2; warmstart_n must be a multiple of 2 so each
+        # reference seed has its novel partner inside the warmstart batch.
+        warmstart_n = max(2, (min(base_n, 2 * len(seeds)) // 2) * 2)
+    else:
+        warmstart_n = min(base_n, len(seeds))
     spec = LayerSpec(
         adapter=adapter,
         surrogate=surrogate,
         warmstart=warmstart,
         max_trials=max_trials,
-        warmstart_n=min(cfg.policy.warmstart.n_configs, len(seeds)),
+        warmstart_n=warmstart_n,
         warmstart_prior=cfg.policy.warmstart.hardware_notes or "",
         reserve_cap=l3_cfg.reserve_cap,
     )
@@ -298,6 +332,7 @@ def _build_l3_spec(
         "reserve_cap": l3_cfg.reserve_cap,
         "atol": l3_cfg.atol,
         "rtol": l3_cfg.rtol,
+        "paired_control": l3_cfg.paired_control,
     }
     return "l3_kernel", spec, event
 
@@ -331,6 +366,7 @@ def _build_surrogate(
     surface: dict[str, Any],
     objective_axis: str,
     maximize: bool,
+    knob_classes: dict[str, dict[str, str]] | None = None,
 ) -> Surrogate:
     """Build the perf surrogate, optionally wrapped in feasibility constraint.
 
@@ -339,6 +375,10 @@ def _build_surrogate(
     from typed failures and rejects candidates whose nearest-neighbor
     history is too failure-dense (see policy/feasibility.py for the
     motivating data).
+
+    ``knob_classes`` (T-26) lets callers inject structural value-to-class
+    taxonomies — e.g. {fp8, fp8_e4m3, fp8_e5m2} as one class — so the
+    classifier generalises a single failure across the whole class.
     """
     s_cfg = cfg.policy.surrogate
     inner = OptunaSurrogate(
@@ -355,6 +395,7 @@ def _build_surrogate(
         feasibility=FeasibilityModel(
             k=s_cfg.feasibility_k,
             min_observations=s_cfg.feasibility_min_observations,
+            knob_classes=knob_classes or {},
         ),
         threshold=s_cfg.feasibility_threshold,
         max_resamples=s_cfg.feasibility_max_resamples,

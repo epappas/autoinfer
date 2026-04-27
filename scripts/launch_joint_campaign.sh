@@ -30,6 +30,7 @@ CONFIG="examples/qwen3-8b-l1-l2-joint/config.yaml"
 MODE="full"
 YES="no"
 ARTIFACTS_DIR=""
+BRANCH=""
 
 while [[ $# -gt 0 ]]; do
     case "$1" in
@@ -37,6 +38,8 @@ while [[ $# -gt 0 ]]; do
         --mode=*)      MODE="${1#*=}"; shift ;;
         --config)      CONFIG="$2"; shift 2 ;;
         --artifacts)   ARTIFACTS_DIR="$2"; shift 2 ;;
+        --branch)      BRANCH="$2"; shift 2 ;;
+        --branch=*)    BRANCH="${1#*=}"; shift ;;
         --yes|-y)      YES="yes"; shift ;;
         --help|-h)     sed -n '1,30p' "$0"; exit 0 ;;
         *)             echo "unknown arg: $1" >&2; exit 2 ;;
@@ -98,6 +101,7 @@ echo "  trials:        $TRIALS_DESC"
 echo "  wall-clock:    $WALL_EST"
 echo "  cost estimate: $COST_EST"
 echo "  artifacts:     $ARTIFACTS_DIR"
+echo "  branch:        ${BRANCH:-main (orchestrator default)}"
 echo "  creds present: BASILICA_API_TOKEN OPENROUTER_API_KEY${HF_TOKEN:+ HF_TOKEN}"
 echo
 
@@ -110,8 +114,11 @@ echo "=== launching ==="
 # PYTHONUNBUFFERED so progress lands in stdout/log files in real time
 # rather than waiting for Python's 4KB stdout buffer to fill.
 export PYTHONUNBUFFERED=1
+BRANCH_ARGS=()
+[[ -n "$BRANCH" ]] && BRANCH_ARGS=(--branch "$BRANCH")
 exec uv run python -u scripts/orchestrate_iteration_zero.py \
     --config "$CONFIG" \
     --name "autoinfer-${CONFIG_NAME}-$(date +%s)" \
     --artifacts-dir "$ARTIFACTS_DIR" \
+    "${BRANCH_ARGS[@]}" \
     "${LAYER_ARGS[@]}"

@@ -127,6 +127,33 @@ def defaults(catalog: KnobCatalog) -> dict[str, Any]:
     return {name: knob.default for name, knob in catalog.knobs.items()}
 
 
+def derive_knob_classes(catalog: KnobCatalog) -> dict[str, dict[str, str]]:
+    """Build per-knob value->class taxonomies from compatibility rules.
+
+    Each rule's ``when_values`` for a given ``when_knob`` is treated as
+    one structural class labelled with the rule name. Two values in the
+    same class compare as distance 0 in ``FeasibilityModel``, so a
+    single failure of any one variant generalises to the rest.
+
+    Why: campaign 01 (2026-04-26) showed the L1 classifier with uniform
+    per-string distance can't extract "fp8 region is infeasible on
+    sm_80" from observed failures of fp8/fp8_e4m3/fp8_e5m2, because each
+    pair was distance 1. Collapsing them via the catalog-declared rule
+    lets a single fp8 failure generalise. T-26.
+
+    Non-string ``when_values`` (e.g. bools in
+    ``chunked_prefill_batched_tokens_bound``) are skipped — bool/numeric
+    distances already have natural semantics.
+    """
+    classes: dict[str, dict[str, str]] = {}
+    for rule in catalog.constraints:
+        bucket = classes.setdefault(rule.when_knob, {})
+        for v in rule.when_values:
+            if isinstance(v, str):
+                bucket[v] = rule.rule
+    return {k: v for k, v in classes.items() if v}
+
+
 def violates_constraints(config: dict[str, Any], catalog: KnobCatalog) -> list[str]:
     """Return the names of constraints ``config`` violates."""
     out: list[str] = []

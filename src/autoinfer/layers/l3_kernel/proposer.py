@@ -51,6 +51,85 @@ _BLOCK_DELIM = "@@@"
 _FIELD_RE = re.compile(r"^\s*([A-Z_]+)\s*:\s*(.*)$")
 
 
+def _cell_key(cfg: dict[str, Any]) -> tuple[str, str, str]:
+    """Canonical cell tuple for a config — used to pair refs with novels."""
+    return (
+        str(cfg.get("target_op", "")),
+        str(cfg.get("dtype", "")),
+        str(cfg.get("shape_regime", "")),
+    )
+
+
+def build_paired_kernel_prompt(
+    surface: dict[str, dict[str, Any]],
+    cells: list[dict[str, Any]],
+    prior_notes: str,
+    history: list[dict[str, Any]],
+) -> str:
+    """T-27: prompt the LLM for one kernel per pinned cell.
+
+    The proposer asks for ``len(cells)`` candidates, each constrained to
+    a specific ``(target_op, dtype, shape_regime)`` cell. The reference
+    kernel for each cell is included so the LLM has the exact target it
+    must beat or match at correctness — and so the campaign can do a
+    same-cell A/B against that reference.
+    """
+    surface_json = json.dumps(surface, indent=2, default=str, sort_keys=True)
+    tail = history[-15:] if history else []
+    history_json = json.dumps(tail, indent=2, default=str, sort_keys=True)
+    notes = prior_notes.strip() or "(none)"
+    cells_json = json.dumps(
+        [
+            {
+                "target_op": c["target_op"],
+                "dtype": c["dtype"],
+                "shape_regime": c["shape_regime"],
+            }
+            for c in cells
+        ],
+        indent=2,
+    )
+    refs_section = "\n\n".join(
+        f"### Reference {op} (entry={entry}):\n```python\n{src}\n```"
+        for op, (entry, src) in REFERENCE_SOURCES.items()
+    )
+    return (
+        "You are proposing kernel implementations for L3 of an "
+        "inference-engine search, in PAIRED-CONTROL mode: every "
+        "candidate you propose is run back-to-back against the "
+        "reference kernel at the SAME (target_op, dtype, shape_regime) "
+        "cell so we can measure your novelty against a same-cell "
+        "control.\n\n"
+        "Your kernel must produce output within atol=1e-3, rtol=1e-3 "
+        "of the PyTorch reference; only kernels that pass correctness "
+        "are timed. The judging environment provides ``torch`` and "
+        "``math``; ``triton`` and ``triton.language`` are importable "
+        "when a GPU is present.\n\n"
+        f"Surrogate surface:\n```json\n{surface_json}\n```\n\n"
+        f"Hardware and runtime notes:\n{notes}\n\n"
+        f"Recent trial history (last {len(tail)}):\n"
+        f"```json\n{history_json}\n```\n\n"
+        f"Reference implementations:\n\n{refs_section}\n\n"
+        f"Propose EXACTLY one candidate per cell, in the order given:\n"
+        f"```json\n{cells_json}\n```\n\n"
+        "Each block MUST set TARGET_OP / DTYPE / SHAPE_REGIME to the "
+        "values of the corresponding cell. Same exact-form delimited "
+        "block as before:\n\n"
+        "TARGET_OP: <cell.target_op>\n"
+        "DTYPE: <cell.dtype>\n"
+        "SHAPE_REGIME: <cell.shape_regime>\n"
+        "ENTRY_FN: <name of the callable in your source>\n"
+        "SOURCE:\n"
+        f"{_BLOCK_DELIM}\n"
+        "import torch\n\n"
+        "def my_kernel(...):\n"
+        "    ...\n"
+        f"{_BLOCK_DELIM}\n\n"
+        "Separate blocks with a blank line. Return NOTHING but the "
+        f"{len(cells)} block(s) — no preamble, no commentary."
+    )
+
+
 def build_kernel_prompt(
     surface: dict[str, dict[str, Any]],
     n: int,
@@ -205,9 +284,156 @@ class KernelProposer:
             )
         return blocks[:n]
 
+    def propose_for_cells(
+        self,
+        cells: list[dict[str, Any]],
+        prior_notes: str,
+        history: list[dict[str, Any]],
+    ) -> list[dict[str, Any]]:
+        """T-27. Ask the LLM for one kernel per pinned cell.
+
+        Returns ``len(cells)`` configs in input order. For each cell, if
+        the LLM produced a parseable block whose (target_op, dtype,
+        shape_regime) matches the requested cell, that block is used —
+        with the cell triple force-set on the returned config so any
+        LLM-side drift is normalised. Otherwise we look for any
+        parseable block whose target_op matches the cell's target_op
+        and reuse that source (re-tagged with the requested
+        dtype/shape_regime). If no block at all matches, that cell
+        falls back to the reference kernel for its target_op (so the
+        pair degenerates to two reference trials — still valid as a
+        same-cell reproducibility data point, never silently emits a
+        wrong-cell candidate).
+        """
+        if not cells:
+            return []
+        from autoinfer.layers.l3_kernel.surface import REFERENCE_SOURCES
+
+        prompt = build_paired_kernel_prompt(
+            surface={}, cells=cells, prior_notes=prior_notes, history=history
+        )
+        text = self.llm.complete(prompt)
+        blocks = parse_kernel_blocks(text)
+
+        # Index parsed blocks by exact cell, and (op-only) for fallback
+        by_cell: dict[tuple[str, str, str], dict[str, Any]] = {}
+        by_op: dict[str, dict[str, Any]] = {}
+        for b in blocks:
+            ck = _cell_key(b)
+            by_cell.setdefault(ck, b)
+            op = str(b.get("target_op", ""))
+            if op:
+                by_op.setdefault(op, b)
+
+        out: list[dict[str, Any]] = []
+        for cell in cells:
+            ck = _cell_key(cell)
+            chosen: dict[str, Any] | None = by_cell.get(ck)
+            if chosen is None:
+                chosen = by_op.get(str(cell["target_op"]))
+            if chosen is None:
+                op = str(cell["target_op"])
+                ref = REFERENCE_SOURCES.get(op)
+                if ref is None:
+                    raise ValueError(
+                        f"no reference for target_op={op!r}; cannot fall back"
+                    )
+                entry, src = ref
+                print(
+                    f"[autoinfer.l3.proposer] paired-control fallback to "
+                    f"reference for cell={ck} (LLM produced no usable block)",
+                    flush=True,
+                )
+                chosen = {"entry_fn": entry, "source": src}
+            # Force the cell triple onto the returned config so paired
+            # ref/novel trials run at the SAME (op, dtype, regime).
+            normalised = dict(chosen)
+            normalised["target_op"] = cell["target_op"]
+            normalised["dtype"] = cell["dtype"]
+            normalised["shape_regime"] = cell["shape_regime"]
+            out.append(normalised)
+        return out
+
+
+@dataclass
+class PairedControlProposer:
+    """T-27. Wraps a base ``KernelProposer`` plus a list of reference
+    seeds, and emits interleaved (reference, llm-novel) pairs at
+    identical ``(target_op, dtype, shape_regime)`` cells so each LLM-
+    novel kernel has a same-cell reference control to A/B against.
+
+    Why: campaign 01 had 2 LLM-novel L3 trials at different cells than
+    its 6 reference trials, so no honest novel-vs-reference comparison
+    was possible (rmsnorm/large/bf16 had only the novel; silu_mul/
+    medium/fp16 also only the novel). Paired control fixes the
+    measurement design at the warmstart layer.
+
+    Behaviour: ``propose_configs(surface, n, ...)`` returns at most
+    ``n`` configs, alternating reference[i], novel[i], reference[i+1],
+    novel[i+1], …, where novel[i] is an LLM-proposed kernel pinned to
+    the same cell as reference[i]. If ``n`` is odd the last entry is
+    a reference seed with no paired novel — the caller can right-size
+    ``n`` (max_trials) to be even to avoid that.
+
+    The LLM-novel half is generated via ``KernelProposer.propose_for_cells``;
+    if the LLM returns no parseable block for some cell (transient
+    failure), that cell falls back to its reference (and the pair
+    degenerates to two identical-cell reference trials, which is
+    still a useful baseline reproducibility check).
+    """
+
+    base: KernelProposer
+    """Base LLM proposer used to generate the novel half of each pair."""
+
+    reference_seeds: list[dict[str, Any]]
+    """One reference config per cell to A/B at. Order is the schedule
+    order; the first pair runs ``reference_seeds[0]`` then a novel
+    pinned to that cell."""
+
+    def __post_init__(self) -> None:
+        if not self.reference_seeds:
+            raise ValueError("reference_seeds must be non-empty")
+        for s in self.reference_seeds:
+            if not all(k in s for k in ("target_op", "dtype", "shape_regime")):
+                raise ValueError(
+                    "every reference seed must carry "
+                    "target_op/dtype/shape_regime; got " + repr(s)
+                )
+
+    def propose_configs(
+        self,
+        surface: dict[str, dict[str, Any]],
+        n: int,
+        prior_notes: str,
+        history: list[dict[str, Any]],
+    ) -> list[dict[str, Any]]:
+        if n <= 0:
+            raise ValueError("n must be positive")
+        n_pairs = (n + 1) // 2
+        cells_needed = [
+            self.reference_seeds[i % len(self.reference_seeds)]
+            for i in range(n_pairs)
+        ]
+        novels = self.base.propose_for_cells(
+            cells=cells_needed,
+            prior_notes=prior_notes,
+            history=history,
+        )
+        out: list[dict[str, Any]] = []
+        for i in range(n_pairs):
+            out.append(dict(cells_needed[i]))
+            if len(out) >= n:
+                break
+            out.append(dict(novels[i]))
+            if len(out) >= n:
+                break
+        return out[:n]
+
 
 __all__ = [
     "KernelProposer",
+    "PairedControlProposer",
     "build_kernel_prompt",
+    "build_paired_kernel_prompt",
     "parse_kernel_blocks",
 ]

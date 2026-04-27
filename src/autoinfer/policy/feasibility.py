@@ -42,7 +42,9 @@ class _Observation:
     failure_kind: FailureKind | None
 
 
-def _knob_distance(a: Any, b: Any) -> float:
+def _knob_distance(
+    a: Any, b: Any, *, class_map: dict[str, str] | None = None
+) -> float:
     """Distance between two knob values, normalised to [0, 1].
 
     - Booleans / strings / None: 0 if equal, else 1 (Hamming).
@@ -51,6 +53,13 @@ def _knob_distance(a: Any, b: Any) -> float:
     - Mixed types: 1 (treat as fully different — bool vs int is the
       common case, and treating ``True == 1`` as equal would lose
       structural information about the knob's type).
+
+    When a ``class_map`` (value -> class label) is provided AND both
+    values are strings, two distinct values that map to the same class
+    compare as distance 0. This lets the classifier collapse e.g.
+    ``{fp8, fp8_e4m3, fp8_e5m2}`` into one structural region so a single
+    failure generalises across all variants. T-26: campaign 01 evidence.
+    Values not appearing in the class_map fall back to per-value Hamming.
     """
     if a is None and b is None:
         return 0.0
@@ -58,12 +67,19 @@ def _knob_distance(a: Any, b: Any) -> float:
         return 1.0
     a_is_bool = isinstance(a, bool)
     b_is_bool = isinstance(b, bool)
-    # Bool/non-bool mismatch is structural — Python's ``True == 1``
-    # would otherwise collapse them silently.
     if a_is_bool != b_is_bool:
         return 1.0
     if a_is_bool and b_is_bool:
         return 0.0 if a == b else 1.0
+    if isinstance(a, str) and isinstance(b, str):
+        if a == b:
+            return 0.0
+        if class_map is not None:
+            ca = class_map.get(a)
+            cb = class_map.get(b)
+            if ca is not None and ca == cb:
+                return 0.0
+        return 1.0
     if isinstance(a, str) or isinstance(b, str):
         return 0.0 if a == b else 1.0
     try:
@@ -75,12 +91,21 @@ def _knob_distance(a: Any, b: Any) -> float:
     return min(1.0, abs(af - bf) / denom)
 
 
-def _config_distance(a: dict[str, Any], b: dict[str, Any]) -> float:
+def _config_distance(
+    a: dict[str, Any],
+    b: dict[str, Any],
+    *,
+    knob_classes: dict[str, dict[str, str]] | None = None,
+) -> float:
     """Sum of per-knob distances over the union of keys.
 
     Missing keys on either side count as distance 1 — penalises configs
     that explore knobs the other side doesn't set, since a structurally-
     different config-space region isn't comparable.
+
+    ``knob_classes`` (knob_name -> value -> class_label) routes per-knob
+    class taxonomies into ``_knob_distance`` so structurally-equivalent
+    values collapse to distance 0.
     """
     keys = set(a) | set(b)
     if not keys:
@@ -90,10 +115,8 @@ def _config_distance(a: dict[str, Any], b: dict[str, Any]) -> float:
         if k not in a or k not in b:
             total += 1.0
         else:
-            total += _knob_distance(a[k], b[k])
-    # Average so the magnitude is comparable across configs of different
-    # arity (a config with 10 knobs and one with 5 knobs are roughly on
-    # the same scale).
+            cm = knob_classes.get(k) if knob_classes else None
+            total += _knob_distance(a[k], b[k], class_map=cm)
     return total / len(keys)
 
 
@@ -121,6 +144,14 @@ class FeasibilityModel:
     distance_floor: float = 1e-6
     """Smallest allowable distance for the inverse-distance weight, so
     an exact-match neighbor doesn't divide-by-zero into infinite weight."""
+
+    knob_classes: dict[str, dict[str, str]] = field(default_factory=dict)
+    """Per-knob value-to-class taxonomies. ``{knob_name: {value: class}}``.
+    Two values mapped to the same class compare at distance 0 within that
+    knob, so a single failure of e.g. ``kv_cache_dtype=fp8_e4m3``
+    generalises to ``fp8`` and ``fp8_e5m2`` when all three live in one
+    class. Empty by default — the classifier falls back to plain
+    per-value Hamming distance for unclassed knobs. T-26."""
 
     _history: list[_Observation] = field(default_factory=list)
 
@@ -191,7 +222,11 @@ class FeasibilityModel:
         4. Return sum(weight where predicate) / sum(weight).
         """
         scored = [
-            (_config_distance(config, obs.config), obs) for obs in self._history
+            (
+                _config_distance(config, obs.config, knob_classes=self.knob_classes),
+                obs,
+            )
+            for obs in self._history
         ]
         scored.sort(key=lambda x: x[0])
         topk = scored[: self.k]

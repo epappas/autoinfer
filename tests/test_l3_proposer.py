@@ -13,7 +13,9 @@ import pytest
 
 from autoinfer.layers.l3_kernel.proposer import (
     KernelProposer,
+    PairedControlProposer,
     build_kernel_prompt,
+    build_paired_kernel_prompt,
     parse_kernel_blocks,
 )
 
@@ -245,3 +247,194 @@ def test_proposer_passes_history_into_prompt() -> None:
     prompt = stub.calls[0]
     assert "GPU=H100" in prompt
     assert "t1" in prompt
+
+
+# T-27: paired-control proposer ----------------------------------------------
+
+
+def _ref_seed(op: str, dtype: str, regime: str) -> dict[str, Any]:
+    return {
+        "target_op": op,
+        "dtype": dtype,
+        "shape_regime": regime,
+        "source": f"def ref_{op}(*args, **kwargs): return args[0]\n",
+        "entry_fn": f"ref_{op}",
+    }
+
+
+def _llm_block(op: str, dtype: str, regime: str, entry: str) -> str:
+    return (
+        f"TARGET_OP: {op}\n"
+        f"DTYPE: {dtype}\n"
+        f"SHAPE_REGIME: {regime}\n"
+        f"ENTRY_FN: {entry}\n"
+        f"SOURCE:\n@@@\n"
+        f"def {entry}(*args, **kwargs):\n    return args[0]\n"
+        f"@@@\n"
+    )
+
+
+def test_build_paired_kernel_prompt_lists_cells_in_order() -> None:
+    cells = [
+        {"target_op": "rmsnorm", "dtype": "bfloat16", "shape_regime": "medium"},
+        {"target_op": "silu_mul", "dtype": "float16", "shape_regime": "small"},
+    ]
+    prompt = build_paired_kernel_prompt(
+        surface={}, cells=cells, prior_notes="", history=[],
+    )
+    # Each cell must appear in the prompt body.
+    assert "rmsnorm" in prompt and "bfloat16" in prompt and "medium" in prompt
+    assert "silu_mul" in prompt and "float16" in prompt and "small" in prompt
+    assert "PAIRED-CONTROL" in prompt
+    # The prompt orders cells: rmsnorm appears before silu_mul.
+    assert prompt.find("rmsnorm") < prompt.find("silu_mul")
+
+
+def test_propose_for_cells_returns_one_per_cell_in_order() -> None:
+    cells = [
+        {"target_op": "rmsnorm", "dtype": "bfloat16", "shape_regime": "medium"},
+        {"target_op": "silu_mul", "dtype": "float16", "shape_regime": "small"},
+    ]
+    response = (
+        _llm_block("rmsnorm", "bfloat16", "medium", "novel_rms")
+        + "\n"
+        + _llm_block("silu_mul", "float16", "small", "novel_silu")
+    )
+    prop = KernelProposer(llm=_StubLLM(response=response))
+    out = prop.propose_for_cells(cells=cells, prior_notes="", history=[])
+    assert len(out) == 2
+    assert out[0]["target_op"] == "rmsnorm"
+    assert out[0]["dtype"] == "bfloat16"
+    assert out[0]["shape_regime"] == "medium"
+    assert out[0]["entry_fn"] == "novel_rms"
+    assert out[1]["target_op"] == "silu_mul"
+    assert out[1]["entry_fn"] == "novel_silu"
+
+
+def test_propose_for_cells_overrides_llm_cell_drift() -> None:
+    """If the LLM returns the right op but wrong dtype/regime, we still
+    emit a config pinned to the requested cell, reusing the LLM's source.
+    Without this guarantee, paired-control would silently lose its
+    same-cell A/B property."""
+    cells = [{"target_op": "rmsnorm", "dtype": "bfloat16", "shape_regime": "medium"}]
+    drift = _llm_block("rmsnorm", "float32", "small", "novel_drift")
+    prop = KernelProposer(llm=_StubLLM(response=drift))
+    out = prop.propose_for_cells(cells=cells, prior_notes="", history=[])
+    assert len(out) == 1
+    assert out[0]["target_op"] == "rmsnorm"
+    assert out[0]["dtype"] == "bfloat16"
+    assert out[0]["shape_regime"] == "medium"
+    assert out[0]["entry_fn"] == "novel_drift"
+    assert "novel_drift" in out[0]["source"]
+
+
+def test_propose_for_cells_falls_back_to_reference_when_op_missing() -> None:
+    """If the LLM returns no block for an op, that cell falls back to
+    the reference kernel for that op so the pair still runs (with the
+    reference-twice degeneracy logged)."""
+    cells = [{"target_op": "rmsnorm", "dtype": "bfloat16", "shape_regime": "medium"}]
+    prop = KernelProposer(llm=_StubLLM(response="garbage no blocks"))
+    out = prop.propose_for_cells(cells=cells, prior_notes="", history=[])
+    assert len(out) == 1
+    assert out[0]["target_op"] == "rmsnorm"
+    assert out[0]["dtype"] == "bfloat16"
+    assert out[0]["shape_regime"] == "medium"
+    # Source must be present (reference fallback)
+    assert out[0].get("source")
+    assert out[0].get("entry_fn")
+
+
+def test_paired_control_alternates_ref_then_novel() -> None:
+    seeds = [
+        _ref_seed("rmsnorm", "bfloat16", "medium"),
+        _ref_seed("silu_mul", "float16", "small"),
+    ]
+    response = (
+        _llm_block("rmsnorm", "bfloat16", "medium", "novel_rms")
+        + "\n"
+        + _llm_block("silu_mul", "float16", "small", "novel_silu")
+    )
+    base = KernelProposer(llm=_StubLLM(response=response))
+    pc = PairedControlProposer(base=base, reference_seeds=seeds)
+    out = pc.propose_configs(surface={}, n=4, prior_notes="", history=[])
+    assert len(out) == 4
+    # Pair 0: ref @ rmsnorm/bf16/medium, then novel at the same cell
+    assert out[0]["entry_fn"] == "ref_rmsnorm"
+    assert out[1]["entry_fn"] == "novel_rms"
+    assert out[0]["target_op"] == out[1]["target_op"] == "rmsnorm"
+    assert out[0]["dtype"] == out[1]["dtype"] == "bfloat16"
+    assert out[0]["shape_regime"] == out[1]["shape_regime"] == "medium"
+    # Pair 1: ref @ silu_mul/fp16/small, then novel at the same cell
+    assert out[2]["entry_fn"] == "ref_silu_mul"
+    assert out[3]["entry_fn"] == "novel_silu"
+    assert out[2]["target_op"] == out[3]["target_op"] == "silu_mul"
+
+
+def test_paired_control_pairs_match_cells_under_drift() -> None:
+    """Even if the LLM returns drifted dtype/regime, the paired pair
+    still matches at the (op, dtype, regime) level — that's the whole
+    point of T-27."""
+    seeds = [_ref_seed("rmsnorm", "bfloat16", "medium")]
+    response = _llm_block("rmsnorm", "float32", "small", "drift_rms")
+    base = KernelProposer(llm=_StubLLM(response=response))
+    pc = PairedControlProposer(base=base, reference_seeds=seeds)
+    out = pc.propose_configs(surface={}, n=2, prior_notes="", history=[])
+    assert (out[0]["target_op"], out[0]["dtype"], out[0]["shape_regime"]) == (
+        "rmsnorm",
+        "bfloat16",
+        "medium",
+    )
+    assert (out[1]["target_op"], out[1]["dtype"], out[1]["shape_regime"]) == (
+        "rmsnorm",
+        "bfloat16",
+        "medium",
+    )
+    assert out[1]["entry_fn"] == "drift_rms"  # LLM source is preserved
+
+
+def test_paired_control_truncates_when_n_is_odd() -> None:
+    """n=3 → ref0 / novel0 / ref1 (no novel for pair 1)."""
+    seeds = [
+        _ref_seed("rmsnorm", "bfloat16", "medium"),
+        _ref_seed("silu_mul", "float16", "small"),
+    ]
+    response = (
+        _llm_block("rmsnorm", "bfloat16", "medium", "novel_rms")
+        + "\n"
+        + _llm_block("silu_mul", "float16", "small", "novel_silu")
+    )
+    base = KernelProposer(llm=_StubLLM(response=response))
+    pc = PairedControlProposer(base=base, reference_seeds=seeds)
+    out = pc.propose_configs(surface={}, n=3, prior_notes="", history=[])
+    assert len(out) == 3
+    assert out[0]["entry_fn"] == "ref_rmsnorm"
+    assert out[1]["entry_fn"] == "novel_rms"
+    assert out[2]["entry_fn"] == "ref_silu_mul"
+
+
+def test_paired_control_cycles_seeds_when_n_exceeds_2x_seeds() -> None:
+    seeds = [_ref_seed("rmsnorm", "bfloat16", "medium")]  # only 1 cell
+    response = _llm_block("rmsnorm", "bfloat16", "medium", "novel_rms")
+    base = KernelProposer(llm=_StubLLM(response=response))
+    pc = PairedControlProposer(base=base, reference_seeds=seeds)
+    out = pc.propose_configs(surface={}, n=4, prior_notes="", history=[])
+    assert len(out) == 4
+    # Pairs alternate, both at the same cell (cycled)
+    for i, cfg in enumerate(out):
+        assert cfg["target_op"] == "rmsnorm"
+        assert cfg["dtype"] == "bfloat16"
+        assert cfg["shape_regime"] == "medium"
+        assert cfg["entry_fn"] == ("ref_rmsnorm" if i % 2 == 0 else "novel_rms")
+
+
+def test_paired_control_rejects_empty_seeds() -> None:
+    base = KernelProposer(llm=_StubLLM(response=""))
+    with pytest.raises(ValueError):
+        PairedControlProposer(base=base, reference_seeds=[])
+
+
+def test_paired_control_rejects_seed_missing_cell_keys() -> None:
+    base = KernelProposer(llm=_StubLLM(response=""))
+    bad = [{"target_op": "rmsnorm", "source": "def f(): pass", "entry_fn": "f"}]
+    with pytest.raises(ValueError):
+        PairedControlProposer(base=base, reference_seeds=bad)
