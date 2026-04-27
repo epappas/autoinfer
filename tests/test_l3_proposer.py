@@ -16,6 +16,7 @@ from autoinfer.layers.l3_kernel.proposer import (
     PairedControlProposer,
     build_kernel_prompt,
     build_paired_kernel_prompt,
+    build_single_cell_kernel_prompt,
     parse_kernel_blocks,
 )
 
@@ -274,6 +275,31 @@ def _llm_block(op: str, dtype: str, regime: str, entry: str) -> str:
     )
 
 
+def test_build_single_cell_kernel_prompt_includes_only_target_cell() -> None:
+    """T-29: single-cell prompt only includes the requested cell's
+    reference, not all 3, to keep the context tight and the LLM focused."""
+    cell = {"target_op": "rmsnorm", "dtype": "bfloat16", "shape_regime": "medium"}
+    prompt = build_single_cell_kernel_prompt(cell=cell, prior_notes="GPU=H100", history=[])
+    assert "rmsnorm" in prompt
+    assert "bfloat16" in prompt
+    assert "medium" in prompt
+    assert "GPU=H100" in prompt
+    # Reference for the target op IS included as the baseline-to-beat
+    assert "rmsnorm_kernel" in prompt
+    # Other ops' references should NOT be included (avoid context bloat)
+    assert "silu_mul_kernel" not in prompt
+    assert "rope_kernel" not in prompt
+    # Single-block instruction
+    assert "ONE kernel" in prompt
+    assert "TARGET_OP    = rmsnorm" in prompt
+
+
+def test_build_single_cell_kernel_prompt_rejects_unknown_op() -> None:
+    cell = {"target_op": "attention", "dtype": "bfloat16", "shape_regime": "medium"}
+    with pytest.raises(ValueError):
+        build_single_cell_kernel_prompt(cell=cell, prior_notes="", history=[])
+
+
 def test_build_paired_kernel_prompt_lists_cells_in_order() -> None:
     cells = [
         {"target_op": "rmsnorm", "dtype": "bfloat16", "shape_regime": "medium"},
@@ -290,17 +316,37 @@ def test_build_paired_kernel_prompt_lists_cells_in_order() -> None:
     assert prompt.find("rmsnorm") < prompt.find("silu_mul")
 
 
+@dataclass
+class _CellAwareStubLLM:
+    """T-29 stub: returns a per-cell response based on the prompt's
+    target cell. Matches the post-T-29 sequential-call protocol where
+    each LLM round-trip names exactly one cell.
+    """
+    by_op: dict[str, str] = field(default_factory=dict)
+    """{target_op: response_text}"""
+    calls: list[str] = field(default_factory=list)
+
+    def complete(self, prompt: str) -> str:
+        self.calls.append(prompt)
+        for op in ("rmsnorm", "silu_mul", "rope"):
+            # Single-cell prompt's cell line: "  TARGET_OP    = rmsnorm"
+            if f"TARGET_OP    = {op}" in prompt:
+                return self.by_op.get(op, "")
+        return ""
+
+
 def test_propose_for_cells_returns_one_per_cell_in_order() -> None:
+    """T-29: each cell gets its own LLM call; results are returned in
+    input order regardless of how the LLM orders its outputs."""
     cells = [
         {"target_op": "rmsnorm", "dtype": "bfloat16", "shape_regime": "medium"},
         {"target_op": "silu_mul", "dtype": "float16", "shape_regime": "small"},
     ]
-    response = (
-        _llm_block("rmsnorm", "bfloat16", "medium", "novel_rms")
-        + "\n"
-        + _llm_block("silu_mul", "float16", "small", "novel_silu")
-    )
-    prop = KernelProposer(llm=_StubLLM(response=response))
+    stub = _CellAwareStubLLM(by_op={
+        "rmsnorm": _llm_block("rmsnorm", "bfloat16", "medium", "novel_rms"),
+        "silu_mul": _llm_block("silu_mul", "float16", "small", "novel_silu"),
+    })
+    prop = KernelProposer(llm=stub)
     out = prop.propose_for_cells(cells=cells, prior_notes="", history=[])
     assert len(out) == 2
     assert out[0]["target_op"] == "rmsnorm"
@@ -309,6 +355,38 @@ def test_propose_for_cells_returns_one_per_cell_in_order() -> None:
     assert out[0]["entry_fn"] == "novel_rms"
     assert out[1]["target_op"] == "silu_mul"
     assert out[1]["entry_fn"] == "novel_silu"
+    # T-29 invariant: one LLM call per cell, not one giant batched call.
+    assert len(stub.calls) == 2
+
+
+def test_propose_for_cells_isolates_per_cell_failures() -> None:
+    """T-29 core motivation: a bad LLM response for cell K must NOT
+    propagate into cell K+1. Campaign 02's 6-block paired prompt broke
+    silu_mul cells when the LLM degraded after the rmsnorm blocks; per-
+    cell calls eliminate that coupling.
+    """
+    cells = [
+        {"target_op": "rmsnorm", "dtype": "bfloat16", "shape_regime": "medium"},
+        {"target_op": "silu_mul", "dtype": "float16", "shape_regime": "small"},
+    ]
+    # rmsnorm returns garbage; silu_mul returns a valid block. Pre-T-29
+    # this would have left silu_mul broken too (the blocks shared a
+    # response). Post-T-29, each cell's response is independent.
+    stub = _CellAwareStubLLM(by_op={
+        "rmsnorm": "sorry I don't know",
+        "silu_mul": _llm_block("silu_mul", "float16", "small", "novel_silu"),
+    })
+    prop = KernelProposer(llm=stub)
+    out = prop.propose_for_cells(cells=cells, prior_notes="", history=[])
+    assert len(out) == 2
+    # rmsnorm cell falls back to reference (no log marker assertion;
+    # the fallback path is exercised — see other tests for that).
+    assert out[0]["target_op"] == "rmsnorm"
+    assert out[0]["dtype"] == "bfloat16"
+    assert out[0].get("source") and out[0].get("entry_fn")
+    # silu_mul cell got the LLM-novel block — independent of rmsnorm's failure.
+    assert out[1]["entry_fn"] == "novel_silu"
+    assert len(stub.calls) == 2
 
 
 def test_propose_for_cells_overrides_llm_cell_drift() -> None:
@@ -349,12 +427,11 @@ def test_paired_control_alternates_ref_then_novel() -> None:
         _ref_seed("rmsnorm", "bfloat16", "medium"),
         _ref_seed("silu_mul", "float16", "small"),
     ]
-    response = (
-        _llm_block("rmsnorm", "bfloat16", "medium", "novel_rms")
-        + "\n"
-        + _llm_block("silu_mul", "float16", "small", "novel_silu")
-    )
-    base = KernelProposer(llm=_StubLLM(response=response))
+    stub = _CellAwareStubLLM(by_op={
+        "rmsnorm": _llm_block("rmsnorm", "bfloat16", "medium", "novel_rms"),
+        "silu_mul": _llm_block("silu_mul", "float16", "small", "novel_silu"),
+    })
+    base = KernelProposer(llm=stub)
     pc = PairedControlProposer(base=base, reference_seeds=seeds)
     out = pc.propose_configs(surface={}, n=4, prior_notes="", history=[])
     assert len(out) == 4

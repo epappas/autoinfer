@@ -224,6 +224,28 @@ class L3KernelConfig(_Base):
             "Default False to keep existing campaigns reproducible."
         ),
     )
+    paired_control_cells: list[tuple[str, str, str]] | None = Field(
+        default=None,
+        description=(
+            "T-26-followup. When ``paired_control=True``, override the "
+            "default 6-cell breadth list with an explicit list of "
+            "(target_op, dtype, shape_regime) tuples. Campaign 03 uses "
+            "this to narrow to 3 cells (+14.7% winner, −11% loser, tie "
+            "from C02) for a focused replication study."
+        ),
+    )
+    paired_control_replicates: int = Field(
+        default=1,
+        ge=1,
+        le=20,
+        description=(
+            "T-26-followup. Number of paired (ref, novel) replicates "
+            "per cell. Default 1 = same as Campaign 02 (no replication). "
+            "Setting > 1 enables a real N>1 paired A/B per cell so "
+            "single-shot LLM emission luck can be distinguished from "
+            "robust kernel-novelty wins."
+        ),
+    )
     warmstart_n: int | None = Field(
         default=None,
         ge=1,

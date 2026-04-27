@@ -281,7 +281,18 @@ def _build_l3_spec(
     if l3_cfg.paired_control:
         from autoinfer.layers.l3_kernel import paired_control_seed_configs
 
-        seeds = paired_control_seed_configs()
+        cells_override: list[tuple[str, str, str]] | None
+        if l3_cfg.paired_control_cells is not None:
+            cells_override = [
+                (str(c[0]), str(c[1]), str(c[2]))
+                for c in l3_cfg.paired_control_cells
+            ]
+        else:
+            cells_override = None
+        seeds = paired_control_seed_configs(
+            cells=cells_override,
+            replicates=l3_cfg.paired_control_replicates,
+        )
     else:
         seeds = reference_seed_configs()
     warmstart: ProposalLLM

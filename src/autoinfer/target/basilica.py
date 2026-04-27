@@ -223,6 +223,7 @@ class CampaignSpec:
         ttl_seconds: int = 43200,
         timeout: int = 1800,
         min_gpu_memory_gb: int = 40,
+        gpu_models: list[str] | None = None,
     ) -> dict[str, Any]:
         """Return kwargs for ``BasilicaClient.deploy``.
 
@@ -263,7 +264,7 @@ class CampaignSpec:
                 failure_threshold=5,
             ),
         )
-        return {
+        kwargs: dict[str, Any] = {
             "name": name,
             "source": self.build_source(),
             "image": image,
@@ -277,3 +278,6 @@ class CampaignSpec:
             "env": env,
             "health_check": health,
         }
+        if gpu_models:
+            kwargs["gpu_models"] = list(gpu_models)
+        return kwargs

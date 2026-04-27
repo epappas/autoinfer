@@ -154,7 +154,50 @@ def test_paired_control_seed_configs_serving_realistic_cells() -> None:
 
 
 def test_paired_control_cells_are_unique() -> None:
-    """No duplicates — each cell should appear once."""
+    """No duplicates — each cell should appear once at default replicates=1."""
     seeds = paired_control_seed_configs()
     cells = [(s["target_op"], s["dtype"], s["shape_regime"]) for s in seeds]
     assert len(cells) == len(set(cells))
+
+
+def test_paired_control_seed_configs_explicit_cells() -> None:
+    """T-26-followup: explicit cells param overrides the default."""
+    cells = [
+        ("rmsnorm", "float16", "large"),
+        ("silu_mul", "bfloat16", "medium"),
+    ]
+    seeds = paired_control_seed_configs(cells=cells)
+    assert len(seeds) == 2
+    assert (seeds[0]["target_op"], seeds[0]["dtype"], seeds[0]["shape_regime"]) == cells[0]
+    assert (seeds[1]["target_op"], seeds[1]["dtype"], seeds[1]["shape_regime"]) == cells[1]
+
+
+def test_paired_control_seed_configs_replicates() -> None:
+    """T-26-followup: replicates>1 emits each cell N times in order."""
+    cells = [
+        ("rmsnorm", "float16", "large"),
+        ("rmsnorm", "bfloat16", "medium"),
+    ]
+    seeds = paired_control_seed_configs(cells=cells, replicates=3)
+    assert len(seeds) == 6  # 2 cells × 3 replicates
+    # The PairedControlProposer cycles seeds to emit (ref, novel) pairs;
+    # for replication we want all 3 obs of cell 0 to land before any of
+    # cell 1, so within-cell variance is captured before cross-cell.
+    cells_emitted = [(s["target_op"], s["dtype"], s["shape_regime"]) for s in seeds]
+    assert cells_emitted[:3] == [cells[0]] * 3
+    assert cells_emitted[3:] == [cells[1]] * 3
+
+
+def test_paired_control_seed_configs_rejects_invalid_replicates() -> None:
+    with pytest.raises(ValueError):
+        paired_control_seed_configs(replicates=0)
+
+
+def test_paired_control_seed_configs_rejects_empty_cells() -> None:
+    with pytest.raises(ValueError):
+        paired_control_seed_configs(cells=[])
+
+
+def test_paired_control_seed_configs_rejects_unknown_op() -> None:
+    with pytest.raises(ValueError):
+        paired_control_seed_configs(cells=[("attention", "bfloat16", "large")])

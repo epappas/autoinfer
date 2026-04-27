@@ -66,8 +66,11 @@ policy:
       Hardware-compat for L1/L2:
         - FP8 KV / FP8 weights only on H100 (sm_90). ANY of
           quantization=fp8, kv_cache_dtype in {fp8, fp8_e4m3, fp8_e5m2}
-          fail STARTUP on A100 and A6000. The campaign container is
-          2x A100, so L1 trials must NEVER use these.
+          fail STARTUP on A100 and A6000.
+        - For Campaign 03, the campaign container runs on 1x H100
+          (sm_90). L1 trials CAN use fp8 quantization / kv-cache here.
+          For Campaign 01 and 02 the container was 2x A100 (sm_80) and
+          fp8 was infeasible at L1.
         - bfloat16 preferred on all three for Qwen3-8B stability.
         - ALWAYS set enable_chunked_prefill=true on L1. With it false,
           max_num_batched_tokens must equal Qwen3-8B's max_model_len
@@ -134,23 +137,28 @@ layers:
     # development without a GPU but Pareto-ineligible for the joint
     # frontier.
     mode: vllm
-    # Campaign 02: paired-control L3 warmstart. Each warmstart trial
-    # is a (reference, llm-novel) pair at the same (target_op, dtype,
-    # shape_regime) cell, drawn from `paired_control_seed_configs()`
-    # (6 cells over rmsnorm/silu_mul x bf16/fp16 x medium/large).
-    # Closes T-27's pre-condition: campaign 01 had 2 LLM-novel trials
-    # at different cells than its reference trials, so no honest A/B.
+    # Campaign 03: narrow-replication paired-control L3 warmstart.
+    # 3 cells × N=3 paired-control replicates = 9 (ref, novel) pairs
+    # = 18 trials. Cells chosen to test reproducibility of Campaign
+    # 02's spread:
+    #   1. rmsnorm/float16/large — the +14.7% NOV win in C02 (T-26-followup)
+    #   2. rmsnorm/bfloat16/medium — the −11.13% NOV loss in C02
+    #   3. silu_mul/float16/large — the +0.77% tie in C02
+    # Each cell with N=3 paired observations turns C02's "1 datapoint
+    # per cell can't distinguish lucky-novel-emission from real win"
+    # into per-cell win-rate (e.g. 3/3 wins, 0/3 wins, 1/3 wins) which
+    # is publishable evidence.
     paired_control: true
-    # warmstart_n=12: 6 cells x 2 (ref + novel) = full paired-control
-    # batch. Per-layer override so L1/L2 keep their existing 4-trial
-    # warmstart batches via policy.warmstart.n_configs=4.
-    warmstart_n: 12
-    # 12 base + 4 reserve: 12 = full paired-control warmstart; reserve
-    # 4 leaves headroom for surrogate exploration once the warmstart
-    # baseline is set. Even though L3 is the deepest layer (reserve
-    # currently only fires from operator stalls), keeping reserve_cap
-    # > 0 lets the operator step in if the surrogate stalls.
-    max_trials: 16
+    paired_control_cells:
+      - [rmsnorm,  float16,  large]
+      - [rmsnorm,  bfloat16, medium]
+      - [silu_mul, float16,  large]
+    paired_control_replicates: 3
+    # warmstart_n=18 = 3 cells × 3 replicates × 2 (ref + novel).
+    warmstart_n: 18
+    # 22 base = 18 paired-control warmstart + 4 surrogate / operator
+    # headroom. reserve_cap=4 unchanged from C02.
+    max_trials: 22
     reserve_cap: 4
     atol: 1e-3
     rtol: 1e-3
