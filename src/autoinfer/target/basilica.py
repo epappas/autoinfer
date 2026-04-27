@@ -224,6 +224,7 @@ class CampaignSpec:
         timeout: int = 1800,
         min_gpu_memory_gb: int = 40,
         gpu_models: list[str] | None = None,
+        spot: bool | None = None,
     ) -> dict[str, Any]:
         """Return kwargs for ``BasilicaClient.deploy``.
 
@@ -292,4 +293,12 @@ class CampaignSpec:
             kwargs["gpu_models"] = list(gpu_models)
         else:
             kwargs["min_gpu_memory_gb"] = min_gpu_memory_gb
+        if spot is not None:
+            # Explicitly request spot or on-demand. Default None lets
+            # Basilica's scheduler pick (whichever it prefers, sometimes
+            # ambiguous when both are available) — for deterministic
+            # scheduling on tight markets (H100 / H200) prefer
+            # spot=False to force on-demand listings, which are pricier
+            # but reliably bookable.
+            kwargs["spot"] = spot
         return kwargs

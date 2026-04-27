@@ -33,6 +33,7 @@ ARTIFACTS_DIR=""
 BRANCH=""
 GPU_MODELS=""
 GPUS=""
+SPOT=""
 
 while [[ $# -gt 0 ]]; do
     case "$1" in
@@ -46,6 +47,8 @@ while [[ $# -gt 0 ]]; do
         --gpu-models=*)GPU_MODELS="${1#*=}"; shift ;;
         --gpus)        GPUS="$2"; shift 2 ;;
         --gpus=*)      GPUS="${1#*=}"; shift ;;
+        --spot)        SPOT="$2"; shift 2 ;;
+        --spot=*)      SPOT="${1#*=}"; shift ;;
         --yes|-y)      YES="yes"; shift ;;
         --help|-h)     sed -n '1,30p' "$0"; exit 0 ;;
         *)             echo "unknown arg: $1" >&2; exit 2 ;;
@@ -110,6 +113,7 @@ echo "  artifacts:     $ARTIFACTS_DIR"
 echo "  branch:        ${BRANCH:-main (orchestrator default)}"
 echo "  gpu-models:    ${GPU_MODELS:-(any matching min-gpu-memory-gb)}"
 echo "  gpus:          ${GPUS:-2 (orchestrator default)}"
+echo "  spot:          ${SPOT:-auto (orchestrator default)}"
 echo "  creds present: BASILICA_API_TOKEN OPENROUTER_API_KEY${HF_TOKEN:+ HF_TOKEN}"
 echo
 
@@ -128,6 +132,8 @@ GPU_MODEL_ARGS=()
 [[ -n "$GPU_MODELS" ]] && GPU_MODEL_ARGS=(--gpu-models "$GPU_MODELS")
 GPU_COUNT_ARGS=()
 [[ -n "$GPUS" ]] && GPU_COUNT_ARGS=(--gpus "$GPUS")
+SPOT_ARGS=()
+[[ -n "$SPOT" ]] && SPOT_ARGS=(--spot "$SPOT")
 exec uv run python -u scripts/orchestrate_iteration_zero.py \
     --config "$CONFIG" \
     --name "autoinfer-${CONFIG_NAME}-$(date +%s)" \
@@ -135,4 +141,5 @@ exec uv run python -u scripts/orchestrate_iteration_zero.py \
     "${BRANCH_ARGS[@]}" \
     "${GPU_MODEL_ARGS[@]}" \
     "${GPU_COUNT_ARGS[@]}" \
+    "${SPOT_ARGS[@]}" \
     "${LAYER_ARGS[@]}"

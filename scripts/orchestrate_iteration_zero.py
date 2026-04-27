@@ -92,6 +92,18 @@ def _parse_args() -> argparse.Namespace:
             "the L3 kernels must run on a specific GPU."
         ),
     )
+    p.add_argument(
+        "--spot",
+        choices=["auto", "true", "false"],
+        default="auto",
+        help=(
+            "Whether to request spot (cheaper, lottery) or on-demand "
+            "(pricier, reliable) instances. Default 'auto' lets "
+            "Basilica's scheduler pick. Use 'false' to force on-demand "
+            "when spot scheduling is unreliable (e.g. tight H100 spot "
+            "pool); use 'true' to explicitly request spot."
+        ),
+    )
     p.add_argument("--ttl-hours", type=float, default=12.0)
     p.add_argument("--artifacts-dir", type=Path, default=Path("./basilica-artifacts"))
     p.add_argument("--log-file", type=Path, default=None)
@@ -294,6 +306,13 @@ def main() -> int:
         if args.gpu_models
         else None
     )
+    spot: bool | None
+    if args.spot == "auto":
+        spot = None
+    elif args.spot == "true":
+        spot = True
+    else:
+        spot = False
     kwargs = spec.build_deploy_kwargs(
         name=args.name,
         image=args.image,
@@ -304,6 +323,7 @@ def main() -> int:
         timeout=1800,
         min_gpu_memory_gb=args.min_gpu_memory_gb,
         gpu_models=gpu_models,
+        spot=spot,
     )
 
     if args.dry_run:
