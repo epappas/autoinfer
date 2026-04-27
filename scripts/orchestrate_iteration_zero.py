@@ -81,6 +81,17 @@ def _parse_args() -> argparse.Namespace:
     p.add_argument("--gpus", type=int, default=2)
     p.add_argument("--memory", default="64Gi")
     p.add_argument("--min-gpu-memory-gb", type=int, default=40)
+    p.add_argument(
+        "--gpu-models",
+        default=None,
+        help=(
+            "Comma-separated list of GPU model strings the campaign "
+            "container must run on (e.g. 'H100' or 'A100,A100-80GB'). "
+            "When set, Basilica's scheduler is constrained to these "
+            "exact models — useful for hardware-class campaigns where "
+            "the L3 kernels must run on a specific GPU."
+        ),
+    )
     p.add_argument("--ttl-hours", type=float, default=12.0)
     p.add_argument("--artifacts-dir", type=Path, default=Path("./basilica-artifacts"))
     p.add_argument("--log-file", type=Path, default=None)
@@ -278,6 +289,11 @@ def main() -> int:
     args = _parse_args()
     spec = _build_spec(args)
     ttl_seconds = int(args.ttl_hours * 3600)
+    gpu_models = (
+        [m.strip() for m in args.gpu_models.split(",") if m.strip()]
+        if args.gpu_models
+        else None
+    )
     kwargs = spec.build_deploy_kwargs(
         name=args.name,
         image=args.image,
@@ -287,6 +303,7 @@ def main() -> int:
         ttl_seconds=ttl_seconds,
         timeout=1800,
         min_gpu_memory_gb=args.min_gpu_memory_gb,
+        gpu_models=gpu_models,
     )
 
     if args.dry_run:

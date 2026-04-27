@@ -60,6 +60,69 @@ def _cell_key(cfg: dict[str, Any]) -> tuple[str, str, str]:
     )
 
 
+def build_single_cell_kernel_prompt(
+    cell: dict[str, Any],
+    prior_notes: str,
+    history: list[dict[str, Any]],
+) -> str:
+    """T-29: prompt the LLM for ONE kernel for ONE pinned cell.
+
+    Replaces the multi-cell paired prompt with a per-cell call. Used by
+    ``KernelProposer.propose_for_cells`` when ``sequential=True`` (the
+    Campaign 03 default). Avoids late-block degradation observed in
+    Campaign 02 where the silu_mul half of a 6-block paired prompt
+    broke 2/3 times — the LLM's attention to delimiter discipline drops
+    over the response length, and the silu_mul block was always last.
+
+    The prompt only includes the reference kernel for the requested
+    cell's op (not all 3 reference kernels) — keeps the context tight.
+    """
+    op = cell["target_op"]
+    dtype = cell["dtype"]
+    regime = cell["shape_regime"]
+    if op not in REFERENCE_SOURCES:
+        raise ValueError(f"unknown target_op {op!r}")
+    ref_entry, ref_src = REFERENCE_SOURCES[op]
+    tail = history[-15:] if history else []
+    history_json = json.dumps(tail, indent=2, default=str, sort_keys=True)
+    notes = prior_notes.strip() or "(none)"
+    return (
+        "You are proposing ONE kernel implementation for L3 of an "
+        "inference-engine search, in PAIRED-CONTROL mode: your kernel "
+        "is run back-to-back against the reference at the SAME "
+        "(target_op, dtype, shape_regime) cell so we can measure your "
+        "novelty against a same-cell control.\n\n"
+        "Your kernel must produce output within atol=1e-3, rtol=1e-3 "
+        "of the PyTorch reference; only kernels that pass correctness "
+        "are timed. The judging environment provides ``torch`` and "
+        "``math``; ``triton`` and ``triton.language`` are importable "
+        "when a GPU is present.\n\n"
+        f"Hardware and runtime notes:\n{notes}\n\n"
+        f"Recent trial history (last {len(tail)}):\n"
+        f"```json\n{history_json}\n```\n\n"
+        f"Target cell:\n"
+        f"  TARGET_OP    = {op}\n"
+        f"  DTYPE        = {dtype}\n"
+        f"  SHAPE_REGIME = {regime}\n\n"
+        f"Reference implementation for {op} (entry={ref_entry}) — your "
+        f"baseline to beat:\n```python\n{ref_src}\n```\n\n"
+        "Return EXACTLY one candidate block of the following form:\n\n"
+        f"TARGET_OP: {op}\n"
+        f"DTYPE: {dtype}\n"
+        f"SHAPE_REGIME: {regime}\n"
+        "ENTRY_FN: <name of the callable in your source>\n"
+        "SOURCE:\n"
+        f"{_BLOCK_DELIM}\n"
+        "import torch\n\n"
+        "def my_kernel(...):\n"
+        "    ...\n"
+        f"{_BLOCK_DELIM}\n\n"
+        "Return NOTHING else — no preamble, no commentary, no second "
+        "block. The TARGET_OP / DTYPE / SHAPE_REGIME lines MUST match "
+        "the target cell exactly."
+    )
+
+
 def build_paired_kernel_prompt(
     surface: dict[str, dict[str, Any]],
     cells: list[dict[str, Any]],
@@ -290,47 +353,35 @@ class KernelProposer:
         prior_notes: str,
         history: list[dict[str, Any]],
     ) -> list[dict[str, Any]]:
-        """T-27. Ask the LLM for one kernel per pinned cell.
+        """T-27 + T-29. Ask the LLM for one kernel per pinned cell, one
+        sequential call per cell.
 
-        Returns ``len(cells)`` configs in input order. For each cell, if
-        the LLM produced a parseable block whose (target_op, dtype,
-        shape_regime) matches the requested cell, that block is used —
-        with the cell triple force-set on the returned config so any
-        LLM-side drift is normalised. Otherwise we look for any
-        parseable block whose target_op matches the cell's target_op
-        and reuse that source (re-tagged with the requested
-        dtype/shape_regime). If no block at all matches, that cell
-        falls back to the reference kernel for its target_op (so the
-        pair degenerates to two reference trials — still valid as a
-        same-cell reproducibility data point, never silently emits a
-        wrong-cell candidate).
+        Returns ``len(cells)`` configs in input order. Each cell gets
+        its own LLM round-trip via ``build_single_cell_kernel_prompt``
+        — replaces the Campaign 02 single 6-block paired prompt that
+        broke 2/3 times in the silu_mul block. Per-cell isolation means
+        a bad emission for cell K doesn't propagate into cell K+1.
+
+        For each cell:
+          - Issue a single-cell LLM call; parse blocks
+          - If any block parsed: take the first one (we asked for one
+            and only one), force-override the (op, dtype, regime)
+            triple onto the returned config so any LLM-side drift is
+            normalised
+          - If nothing parsed: fall back to the reference kernel for
+            this op (with a [autoinfer.l3.proposer] log marker so post-
+            run analysis can count fallbacks; pair degenerates to two
+            reference trials at the same cell — still a valid data
+            point, never silently emits a wrong-cell candidate).
         """
         if not cells:
             return []
         from autoinfer.layers.l3_kernel.surface import REFERENCE_SOURCES
 
-        prompt = build_paired_kernel_prompt(
-            surface={}, cells=cells, prior_notes=prior_notes, history=history
-        )
-        text = self.llm.complete(prompt)
-        blocks = parse_kernel_blocks(text)
-
-        # Index parsed blocks by exact cell, and (op-only) for fallback
-        by_cell: dict[tuple[str, str, str], dict[str, Any]] = {}
-        by_op: dict[str, dict[str, Any]] = {}
-        for b in blocks:
-            ck = _cell_key(b)
-            by_cell.setdefault(ck, b)
-            op = str(b.get("target_op", ""))
-            if op:
-                by_op.setdefault(op, b)
-
         out: list[dict[str, Any]] = []
         for cell in cells:
             ck = _cell_key(cell)
-            chosen: dict[str, Any] | None = by_cell.get(ck)
-            if chosen is None:
-                chosen = by_op.get(str(cell["target_op"]))
+            chosen = self._propose_for_single_cell(cell, prior_notes, history)
             if chosen is None:
                 op = str(cell["target_op"])
                 ref = REFERENCE_SOURCES.get(op)
@@ -345,14 +396,28 @@ class KernelProposer:
                     flush=True,
                 )
                 chosen = {"entry_fn": entry, "source": src}
-            # Force the cell triple onto the returned config so paired
-            # ref/novel trials run at the SAME (op, dtype, regime).
             normalised = dict(chosen)
             normalised["target_op"] = cell["target_op"]
             normalised["dtype"] = cell["dtype"]
             normalised["shape_regime"] = cell["shape_regime"]
             out.append(normalised)
         return out
+
+    def _propose_for_single_cell(
+        self,
+        cell: dict[str, Any],
+        prior_notes: str,
+        history: list[dict[str, Any]],
+    ) -> dict[str, Any] | None:
+        """One LLM round-trip for one cell. Returns the first parseable
+        block or None if the response had no parseable blocks. The
+        caller handles the reference-fallback path."""
+        prompt = build_single_cell_kernel_prompt(
+            cell=cell, prior_notes=prior_notes, history=history,
+        )
+        text = self.llm.complete(prompt)
+        blocks = parse_kernel_blocks(text)
+        return blocks[0] if blocks else None
 
 
 @dataclass
@@ -435,5 +500,6 @@ __all__ = [
     "PairedControlProposer",
     "build_kernel_prompt",
     "build_paired_kernel_prompt",
+    "build_single_cell_kernel_prompt",
     "parse_kernel_blocks",
 ]

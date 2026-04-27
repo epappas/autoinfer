@@ -31,6 +31,8 @@ MODE="full"
 YES="no"
 ARTIFACTS_DIR=""
 BRANCH=""
+GPU_MODELS=""
+GPUS=""
 
 while [[ $# -gt 0 ]]; do
     case "$1" in
@@ -40,6 +42,10 @@ while [[ $# -gt 0 ]]; do
         --artifacts)   ARTIFACTS_DIR="$2"; shift 2 ;;
         --branch)      BRANCH="$2"; shift 2 ;;
         --branch=*)    BRANCH="${1#*=}"; shift ;;
+        --gpu-models)  GPU_MODELS="$2"; shift 2 ;;
+        --gpu-models=*)GPU_MODELS="${1#*=}"; shift ;;
+        --gpus)        GPUS="$2"; shift 2 ;;
+        --gpus=*)      GPUS="${1#*=}"; shift ;;
         --yes|-y)      YES="yes"; shift ;;
         --help|-h)     sed -n '1,30p' "$0"; exit 0 ;;
         *)             echo "unknown arg: $1" >&2; exit 2 ;;
@@ -102,6 +108,8 @@ echo "  wall-clock:    $WALL_EST"
 echo "  cost estimate: $COST_EST"
 echo "  artifacts:     $ARTIFACTS_DIR"
 echo "  branch:        ${BRANCH:-main (orchestrator default)}"
+echo "  gpu-models:    ${GPU_MODELS:-(any matching min-gpu-memory-gb)}"
+echo "  gpus:          ${GPUS:-2 (orchestrator default)}"
 echo "  creds present: BASILICA_API_TOKEN OPENROUTER_API_KEY${HF_TOKEN:+ HF_TOKEN}"
 echo
 
@@ -116,9 +124,15 @@ echo "=== launching ==="
 export PYTHONUNBUFFERED=1
 BRANCH_ARGS=()
 [[ -n "$BRANCH" ]] && BRANCH_ARGS=(--branch "$BRANCH")
+GPU_MODEL_ARGS=()
+[[ -n "$GPU_MODELS" ]] && GPU_MODEL_ARGS=(--gpu-models "$GPU_MODELS")
+GPU_COUNT_ARGS=()
+[[ -n "$GPUS" ]] && GPU_COUNT_ARGS=(--gpus "$GPUS")
 exec uv run python -u scripts/orchestrate_iteration_zero.py \
     --config "$CONFIG" \
     --name "autoinfer-${CONFIG_NAME}-$(date +%s)" \
     --artifacts-dir "$ARTIFACTS_DIR" \
     "${BRANCH_ARGS[@]}" \
+    "${GPU_MODEL_ARGS[@]}" \
+    "${GPU_COUNT_ARGS[@]}" \
     "${LAYER_ARGS[@]}"

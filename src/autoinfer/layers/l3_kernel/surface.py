@@ -292,35 +292,49 @@ _PAIRED_CONTROL_DEFAULT_CELLS: tuple[tuple[str, str, str], ...] = (
 )
 
 
-def paired_control_seed_configs() -> list[dict[str, Any]]:
-    """T-27. Reference seeds at the cells Campaign 02 will A/B at.
+def paired_control_seed_configs(
+    cells: list[tuple[str, str, str]] | None = None,
+    replicates: int = 1,
+) -> list[dict[str, Any]]:
+    """T-27 (cells), T-26-followup (replicates). Reference seeds for a
+    paired-control L3 warmstart.
 
-    Returns one reference config per cell in
-    ``_PAIRED_CONTROL_DEFAULT_CELLS``. Each is a fully-formed warmstart
-    config (target_op, dtype, shape_regime, source, entry_fn) that
-    ``PairedControlProposer`` cycles through as the reference half of
-    each pair.
+    Returns one reference config per (cell, replicate). Each is a fully-
+    formed warmstart config (target_op, dtype, shape_regime, source,
+    entry_fn) that ``PairedControlProposer`` cycles through as the
+    reference half of each pair.
 
-    Cells are curated, not exhaustive: 6 (op, dtype, regime) tuples
-    cover the bands where campaign 01 produced KEPT L3 trials.
-    Exhaustive (2 ops × 2 dtypes × 3 regimes = 12 cells) would consume
-    L3's 12-trial budget on warmstart alone, leaving no surrogate or
-    operator headroom — see campaign 02 doc for the trade-off.
+    ``cells`` (default ``_PAIRED_CONTROL_DEFAULT_CELLS``): list of
+    ``(target_op, dtype, shape_regime)`` triples to A/B at. Curated by
+    the campaign — campaign 02 used the default 6-cell breadth list;
+    campaign 03 uses a 3-cell narrow-replication list (the +14.7%
+    winner, the −11% loser, and the tie from C02).
+
+    ``replicates`` (default 1): how many times each cell appears in the
+    seed list. Replicates>1 enable a real N>1 paired A/B per cell —
+    Campaign 02 had N=1 and couldn't distinguish a real LLM-novel win
+    from a single-shot LLM emission lucky enough to beat the reference.
     """
+    if replicates < 1:
+        raise ValueError(f"replicates must be >= 1, got {replicates}")
+    cells = list(cells) if cells is not None else list(_PAIRED_CONTROL_DEFAULT_CELLS)
+    if not cells:
+        raise ValueError("cells must be non-empty")
     seeds: list[dict[str, Any]] = []
-    for op, dtype, regime in _PAIRED_CONTROL_DEFAULT_CELLS:
+    for op, dtype, regime in cells:
         if op not in REFERENCE_SOURCES:
             raise ValueError(f"unknown target_op {op!r} in paired-control cells")
         entry, src = REFERENCE_SOURCES[op]
-        seeds.append(
-            {
-                "target_op": op,
-                "dtype": dtype,
-                "shape_regime": regime,
-                "source": src,
-                "entry_fn": entry,
-            }
-        )
+        for _ in range(replicates):
+            seeds.append(
+                {
+                    "target_op": op,
+                    "dtype": dtype,
+                    "shape_regime": regime,
+                    "source": src,
+                    "entry_fn": entry,
+                }
+            )
     return seeds
 
 
