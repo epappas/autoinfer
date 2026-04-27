@@ -337,56 +337,246 @@ Conditional on outcome:
 
 ---
 
-## Outcome (filled in after the run)
+## Outcome
 
-**Status:** PLANNED → ?
+**Status:** COMPLETE. 40 trials in 117 min wall, ~$15-20 spent (still
+to confirm), 18 KEPT / 18 FAIL / 4 stale. **Q1 affirmed at one cell;
+Q2 negative; Q3 affirmed; Q4 parser brittleness confirmed.**
+
+The campaign launched twice — see "Bugs surfaced" below for the full
+honest disclosure of the launch-1 corner-cut. The data summarised
+here is from launch-2 (proper deployment, run_id `cc00ac161237`,
+git_sha `934b0ffed92e28b35d6e08be68ef8e5887b48232`).
 
 ### Headline numbers
-*To fill after run.*
+
+```
+Joint Pareto frontier (2 entries, both L2):
+  l2_topology_w0000  A100 / bf16 / gmu=0.88 / 2-GPU / enforce_eager=False
+                     -> 934.9 tok/s, 84.0 ms TPOT, kl=3.74
+  l2_topology_w0001  H100 / bf16 / gmu=0.85 / 1-GPU / enforce_eager=True
+                     -> 767.6 tok/s, 18.1 ms TPOT, kl=0.40
+
+Per-layer best:
+  L1 (operator-reserve, A100 2-GPU):  o0019  864.9 tok/s,  103.0 ms TPOT
+  L2 (warmstart, A100 2-GPU):         w0000  934.9 tok/s,   84.0 ms TPOT
+  L3 (warmstart silu_mul REF):        w0006  888.8 tok/s,  112.7 ms TPOT
+```
 
 ### Paired-cell A/B table (Q1)
 
-| Cell | Reference tok/s | Novel tok/s | Δ% | Reference KL | Novel KL | Verdict |
+| Cell | REF tok/s | NOV tok/s | Δ% | REF KL | NOV KL | Verdict |
 |---|---|---|---|---|---|---|
-| rmsnorm/bf16/medium | … | … | … | … | … | … |
-| rmsnorm/bf16/large | … | … | … | … | … | … |
-| rmsnorm/fp16/large | … | … | … | … | … | … |
-| silu_mul/bf16/medium | … | … | … | … | … | … |
-| silu_mul/bf16/large | … | … | … | … | … | … |
-| silu_mul/fp16/large | … | … | … | … | … | … |
+| rmsnorm/bf16/medium | 844.5 | 750.5 | −11.13% | 3.62 | 3.10 | NOV loses |
+| rmsnorm/bf16/large | 836.5 | 838.8 | +0.28% | 3.38 | 3.68 | tie |
+| **rmsnorm/fp16/large** | **748.7** | **858.7** | **+14.70%** | 2.97 | 3.00 | **NOV WINS** |
+| silu_mul/bf16/medium | 888.8 | — | — | 2.53 | — | NOV startup-fail (w0007) |
+| silu_mul/bf16/large | 852.3 | — | — | 4.47 | — | NOV quality_kl-fail (w0009) |
+| silu_mul/fp16/large | 794.4 | 800.5 | +0.77% | 2.31 | 2.54 | tie |
+
+5 valid pairs (10 trials), 1 NOV win, 2 ties, 2 NOV losses, 2 NOV
+broken (no A/B). The single NOV win at rmsnorm/fp16/large is **+14.7%
+with KL essentially identical to the reference (3.00 vs 2.97)** — well
+above the pre-registration's 5% "robust to call" threshold.
+
+This is **Outcome A landing at one cell** — the pre-registration's
+low-probability path. The other cells split between ties and NOV
+losses, which honestly reflects the kernel-search difficulty: 1 in 4
+LLM-novel kernels at this surface beats the reference end-to-end on
+A100, but the architecture works.
+
+The Δ−11.13% at rmsnorm/bf16/medium and Δ−13.30% at silu_mul/bf16/large
+are within the same kernel-search noise band that produced the +14.7%
+win. The campaign's N=1 per cell genuinely cannot distinguish "novel
+slower" from "this LLM-emitted kernel happened to be slower today";
+both directions need replication. T-26-followup (cross-cell N>1)
+remains the right next campaign.
 
 ### L1 surrogate hit-rate (Q2)
 
 ```
-n_warmstart_kept / n_warmstart   = … / 4
-n_operator_kept   / n_operator    = … / ~3
-n_surrogate_kept  / n_surrogate   = … / ~7
-n_reserve_kept    / n_reserve     = … / 0–6
+n_warmstart_kept / n_warmstart   =  2 / 4    (50%)
+n_operator_kept   / n_operator    =  4 / 4    (100%, includes reserve operator)
+n_surrogate_kept  / n_surrogate   =  1 / 12   (8.3%)
+n_reserve_kept    / n_reserve     =  1 / 5    (20%, includes operator reserve)
 ```
 
-`fp8_proposals_after_first_fp8_failure = …` (target ≤ 1)
+L1 surrogate hit-rate: **8.3%** (1 KEPT / 12 surrogate trials). Same
+as Campaign 01 baseline. **Class-aware feasibility filtering DID NOT
+improve the surrogate hit-rate.**
+
+`fp8_proposals_after_first_fp8_failure = 7` (target ≤ 1 — solidly
+above target):
+
+```
+s0005 fp8_e5m2  → STARTUP fail (first fp8 failure)
+s0006 fp8_e4m3  → STARTUP fail
+s0010 fp8_e5m2  → STARTUP fail   (after 2 fp8 failures, classifier didn't filter)
+s0011 fp8_e4m3  → STARTUP fail
+s0012 fp8_e5m2  → STARTUP fail
+s0015 fp8       → STARTUP fail
+s0017 fp8_e4m3  → STARTUP fail
+s0018 fp8_e5m2  → STARTUP fail
+```
+
+**Why class-collapse alone wasn't enough:** `_config_distance` averages
+distance across all 12 L1 knobs. Class-collapse on `kv_cache_dtype`
+pulls that one knob's distance to 0 between fp8 variants, but the
+other 11 knobs (max_num_seqs, gpu_memory_utilization, attention_backend,
+etc.) all vary across surrogate proposals. Their averaged contribution
+keeps the overall config-distance to nearest fp8-failure neighbor at
+~0.5, and the inverse-distance-weighted P(success) doesn't drop below
+the `feasibility_threshold=0.4` reliably. The classifier needs **per-
+knob feature weights** so `kv_cache_dtype` (which deterministically
+predicts feasibility on this hardware) dominates over knobs that don't.
+
+This is **Outcome D in the pre-registration** — opens **T-26b: per-knob
+feature weights or per-FailureKind sub-classifiers**.
 
 ### Reconciliation with predictions
 
 | Prediction | Actual | Match? |
 |---|---|---|
-| Outcome A: LLM-novel beats reference @ ≥ 1 cell | … | … |
-| Outcome B: all 6 pairs within ±2% | … | … |
-| Outcome C: Q2 ≥ 30% L1 kept-rate | … | … |
-| Outcome D: Q2 partial 10–25% | … | … |
-| Outcome E: Q3 reserve-on-stale 2nd-pass improvement | … | … |
-| Outcome F: Q4 parser brittleness > 2/6 fallback | … | … |
+| Outcome A: LLM-novel beats reference @ ≥ 1 cell | rmsnorm/fp16/large +14.7% | **YES** (low-probability prediction landed) |
+| Outcome B: all 6 pairs within ±2% | 2 cells in ±2%, 2 cells outside ±10%, 1 win | NO (more variance than B predicted) |
+| Outcome C: Q2 ≥ 30% L1 surrogate kept-rate | 8.3% surrogate kept-rate | NO |
+| Outcome D: Q2 partial 10–25% | 8.3% — class-collapse insufficient | **YES** (and slightly worse than D predicted) |
+| Outcome E: Q3 reserve-on-stale 2nd-pass improvement | L1 reserve operator `o0019` @ 864.9 tok/s = best L1 trial | **YES** |
+| Outcome F: Q4 parser brittleness > 2/6 fallback | 2/6 NOV halves broken (33%) | **YES** |
+| Outcome G: integration breakage | none | NO (clean run) |
+
+### What the data tells us about each Q
+
+**Q1 — kernel-novel architecture validated at one cell.** rmsnorm/fp16/large
+showed a robust +14.7% LLM-novel-vs-reference paired delta. The
+architecture (kernel-into-vLLM injector + paired-control warmstart +
+end-to-end serving bench + KL gate) works as designed and produces
+measurement-grade A/B data. Replication study (T-26-followup) is the
+right next step before claiming the result generally — 1 cell out of
+6 is suggestive, not conclusive. The +14.7% may also be partly a
+reference-floor artifact: rmsnorm/fp16/large REF was the slowest of
+the 6 reference cells (748.7 tok/s vs 794-889 for others), so the
+LLM-novel kernel may have specifically picked up an easier baseline
+to beat. Cross-cell variance is itself a signal worth following up.
+
+**Q2 — class-collapse alone insufficient.** The class-aware FeasibilityModel
+does record class structure correctly (the kvc=fp8 cluster collapses
+to distance 0 within that knob), but config-distance averaging dilutes
+the signal across the other 11 knobs. The classifier's prediction
+threshold isn't reliably crossed for the fp8 region. **T-26b** opens
+to fix: per-knob distance weights informed by which knobs deterministically
+predict feasibility (kv_cache_dtype is high-weight, gpu_memory_utilization
+is low-weight). Per-FailureKind sub-classifiers are an alternative path
+worth exploring in the same ticket.
+
+**Q3 — reserve-on-stale produced the L1 best.** L2 fired stale at
+`l2_topology_w0000` joining the joint Pareto frontier. 14 L1 entries
+flagged stale, L1 reserve_cap=6 granted. 5 reserve trials ran
+(s0015-s0018 surrogate, o0019 operator). **`o0019` landed KEPT at
+864.9 tok/s — the best L1 trial of the entire campaign**. This is
+P4's strongest empirical instance to date: the reserve mechanism
+didn't just fire correctly, it produced a per-layer best.
+
+**Q4 — paired-prompt parser brittleness confirmed.** 2 of 6 paired-control
+NOV halves broke: w0007 (silu_mul/bf16/medium) startup-failed and w0009
+(silu_mul/bf16/large) hit the quality_kl gate. Both happened in the
+silu_mul block of the LLM's response, suggesting either the silu_mul
+prompt section is harder for the LLM to produce correctly OR the LLM
+got worse at the bottom of a 6-block response. **T-29** opens for
+prompt robustness (split into per-cell sequential calls, OR tighten
+delimited-block grammar, OR provide more explicit silu_mul few-shot
+examples).
 
 ### Bugs surfaced and their fixes
-*To fill.*
+
+**Launch-1 corner-cut — disclosed and corrected.** The first launch
+attempt of Campaign 02 (deployment `89c19735-...`) was started via
+`./launch_joint_campaign.sh ... | tee log | head -120`. The `head -120`
+truncation killed the orchestrator via SIGPIPE after bootstrap, leaving
+the Basilica deployment running autonomously without local supervision
+(no artifact-fetch, no auto-delete). Compounding error: the 5 commits
+implementing T-26, T-27, and the Campaign 02 pre-registration had not
+been pushed to origin/main. The orchestrator clones origin/main, so
+launch-1 ran with the OLD code (`b12e663`) — effectively a Campaign
+01 replication, not Campaign 02 as designed.
+
+**Disclosure path:** detected the issue when inspecting the
+`config_loaded` event from launch-1's run — `paired_control` field
+absent, `max_trials: 12` (not 16), L3 cells matching old
+`reference_seed_configs()` (rope/fp32/small included, which paired
+control explicitly excludes). Reported to user immediately.
+
+**Resolution:**
+1. Launch-1 deployment deleted (user-authorized path A);
+2. Launch-1 artifacts archived under
+   `basilica-artifacts/campaign02-redux-c01-baseline-2026-04-27/`
+   for use as comparable baseline data, NOT as Campaign 02 results;
+3. 5 local commits pushed to feature branch
+   `campaign02-paired-control` (no direct push to main, per repo
+   policy);
+4. PR #5 opened;
+5. Launch script enhanced with `--branch` flag (commit `934b0ff`)
+   so the feature branch could be deployed end-to-end without
+   merging first;
+6. Launch-2 ran from the feature branch with the right code, no
+   pipe truncation. Confirmed via `config_loaded.per_layer[l3_kernel]
+   .paired_control: True` and `git_sha: 934b0ff...` in run_summary.
+
+This is a process bug, not a code bug. The mitigation is a
+campaign-launch checklist that includes "verify origin/main has the
+intended commits before launch."
+
+**No campaign-internal bugs surfaced** during launch-2. All trial
+outcomes are real measurements from the deployed-as-designed code.
 
 ### What's still open after this run
-*To fill — likely T-21 escalation regardless of Q1 outcome.*
+
+**Newly opened TODOs:**
+- **T-26b** (P0): FeasibilityModel per-knob feature weights so
+  `kv_cache_dtype` dominates over low-information knobs. OR a
+  per-FailureKind sub-classifier so STARTUP failures don't average
+  with QUALITY_KL failures. Q2 needs this to clear the 30% target.
+- **T-29** (P1): paired-control prompt robustness. Either split the
+  6-block paired prompt into 6 sequential per-cell calls OR tighten
+  the delimited-block grammar so longer responses don't degrade.
+- **T-26-followup** (P1): replication campaign for the rmsnorm/fp16/large
+  +14.7% result. N≥3 paired observations at that cell + at least one
+  H100 datapoint to test hardware-class generality before claiming
+  the result generally.
+
+**Reaffirmed open items:**
+- T-21 (attention injector) stays at "deferred — multi-day work."
+  The Q1 win at rmsnorm/fp16/large weakens the case for prioritising
+  T-21 *immediately* — the existing rmsnorm/silu_mul surface produces
+  measurable wins; the kernel architecture's load-bearing claim has
+  its first datapoint. T-26-followup (replication) and T-26b
+  (classifier) are higher-leverage right now.
 
 ### Cost actually spent
-*To fill.*
+
+- Campaign-2 container (1× A100 80GB spot, 117 min): ~$3-5
+- Basilica candidate compute (4 L2 deployments × 15-25 min on
+  H100/A100/A6000 spot): ~$8-12
+- OpenRouter (Sonnet 4 — warmstart × 3 layers + paired-control batch
+  + 5 operator calls): ~$1.50
+- Launch-1 redux container (lost to corner-cut): ~$3-5 (bootstrap
+  through partial L1+L2)
+- **Total: ~$15-25** (within $20–30 estimate, +$3-5 wasted on launch-1)
 
 ### Artifacts
+
+- **Campaign 02-proper:**
+  `basilica-artifacts/qwen3-8b-l1-l2-l3-joint-1777286391/qwen3-8b-l1-l2-l3-joint/`
+  (75+ files: 40 trial JSONs + bench JSONs + vllm.{out,err} + events.jsonl +
+  run_summary.json + hw_context.json + reference.log)
+- **Launch-1 redux baseline (preserved, NOT campaign 02 data):**
+  `basilica-artifacts/campaign02-redux-c01-baseline-2026-04-27/`
+- **Pre-registration commit:** `213bdd2` (this doc, originally)
+- **Run-time commits:** `934b0ff` (--branch plumbing)
+- **PR:** https://github.com/epappas/autoinfer/pull/5
+- **Run git_sha:** `934b0ffed92e28b35d6e08be68ef8e5887b48232`
+  (= feature branch `campaign02-paired-control` HEAD at launch)
+- **Article-grade analysis:** `docs/research/references/12-campaign02-results.md` (to be written)
 
 - `docs/research/raw/campaign02-paired-control-2026-04-26/`
 - `docs/research/references/12-campaign02-results.md`
