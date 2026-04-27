@@ -1,6 +1,6 @@
-# Campaign 02 — paired-control L3 + class-aware feasibility (2026-04-26)
+# Campaign 02 — paired-control L3 + class-aware feasibility (2026-04-27)
 
-**Status:** PLANNED
+**Status:** RUNNING
 
 Campaign 02 closes the two methodology gaps Campaign 01 surfaced:
 
