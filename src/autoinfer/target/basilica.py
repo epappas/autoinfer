@@ -270,7 +270,6 @@ class CampaignSpec:
             "image": image,
             "port": self.artifacts_port,
             "gpu_count": gpu_count,
-            "min_gpu_memory_gb": min_gpu_memory_gb,
             "memory": memory,
             "storage": storage,
             "ttl_seconds": ttl_seconds,
@@ -278,6 +277,19 @@ class CampaignSpec:
             "env": env,
             "health_check": health,
         }
+        # Only pass min_gpu_memory_gb when gpu_models is NOT set. The two
+        # filters AND together in Basilica's scheduler — combining them
+        # produces an over-constrained query that gets stuck in
+        # "scheduling" even when nodes matching gpu_models alone exist.
+        # The L2 adapter's successful H100 deploys via ``deploy_vllm``
+        # only pass ``gpu_models`` and let the model name carry the
+        # implicit memory expectation (H100 = 80 GB, etc.). We mirror
+        # that pattern here. Two failed Campaign 03 H100 deploys
+        # (2026-04-27) sat 30 min in scheduling each before timing out
+        # with this combined filter; without min_gpu_memory_gb the
+        # gpu_models=["H100"] query alone schedules successfully.
         if gpu_models:
             kwargs["gpu_models"] = list(gpu_models)
+        else:
+            kwargs["min_gpu_memory_gb"] = min_gpu_memory_gb
         return kwargs
