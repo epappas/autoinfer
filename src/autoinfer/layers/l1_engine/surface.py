@@ -154,6 +154,36 @@ def derive_knob_classes(catalog: KnobCatalog) -> dict[str, dict[str, str]]:
     return {k: v for k, v in classes.items() if v}
 
 
+def derive_knob_weights(
+    catalog: KnobCatalog, *, high_weight: float = 10.0
+) -> dict[str, float]:
+    """Build per-knob distance weights from compatibility rules.
+
+    Knobs that appear as ``when_knob`` or ``requires_knob`` in any
+    compat rule are treated as deterministic feasibility predictors and
+    get ``high_weight``. Every other knob is omitted from the dict;
+    ``_config_distance`` uses 1.0 as the default for missing entries.
+    T-26b.
+
+    Why: campaign 02 (2026-04-27) showed T-26's class collapse on
+    ``kv_cache_dtype`` was insufficient — ``_config_distance`` averaged
+    over all 12 L1 knobs, so the FP8 cluster signal got diluted by 11
+    unrelated knobs varying across surrogate proposals. Weighting
+    catalog-rule knobs ~10x means a candidate matching a known-failed
+    region on those knobs lands close to the FAIL neighbours regardless
+    of how other knobs differ.
+
+    Default ``high_weight=10.0``: with one upweighted knob at distance
+    0 (matching FAIL region) vs 11 default-weighted knobs at average
+    distance 0.5, the weighted average is ``(10*0 + 11*0.5)/(10+11) ≈
+    0.26``, comfortably below the typical
+    ``feasibility_threshold=0.4``. Tunable per deployment.
+    """
+    knobs_in_rules = {rule.when_knob for rule in catalog.constraints}
+    knobs_in_rules |= {rule.requires_knob for rule in catalog.constraints}
+    return {name: high_weight for name in catalog.knobs if name in knobs_in_rules}
+
+
 def violates_constraints(config: dict[str, Any], catalog: KnobCatalog) -> list[str]:
     """Return the names of constraints ``config`` violates."""
     out: list[str] = []

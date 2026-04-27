@@ -11,6 +11,7 @@ Covers:
 from __future__ import annotations
 
 import math
+from typing import Any
 
 import pytest
 
@@ -352,6 +353,125 @@ def test_predict_proba_without_class_map_does_not_generalise_across_variants() -
     )
     assert p_classed < 0.2, (
         f"class-aware classifier should solidly predict failure: got {p_classed}"
+    )
+
+
+def test_config_distance_with_knob_weights_matches_weighted_average() -> None:
+    """T-26b: per-knob weights produce a weighted average, not a uniform mean."""
+    a = {"x": "fp8", "y": 0.85, "z": 1024}
+    b = {"x": "auto", "y": 0.85, "z": 1024}
+    # x mismatches (distance 1.0); y and z exact match (distance 0.0).
+    # Plain average = 1/3 ≈ 0.333. Weighted with x=10x: 10/(10+1+1) ≈ 0.833.
+    plain = _config_distance(a, b)
+    weighted = _config_distance(a, b, knob_weights={"x": 10.0})
+    assert plain == pytest.approx(1/3, abs=1e-3)
+    assert weighted == pytest.approx(10/12, abs=1e-3)
+    assert weighted > plain
+
+
+def test_config_distance_zero_weight_floor_is_safe() -> None:
+    """Defensive: empty config + empty weights returns 0, not divide-by-zero."""
+    assert _config_distance({}, {}, knob_weights={"x": 5.0}) == 0.0
+
+
+def test_config_distance_missing_keys_inherit_weight() -> None:
+    """A knob present in only one config still contributes weight 1 (or
+    its declared weight) to keep the missing-side penalty meaningful."""
+    a = {"x": "auto", "y": 1}
+    b = {"x": "auto"}  # y missing on b
+    # plain: x dist 0, y dist 1 (missing) → avg = 0.5
+    # weighted (y=10): x dist 0 with w=1, y dist 1 with w=10 → 10/11
+    plain = _config_distance(a, b)
+    weighted = _config_distance(a, b, knob_weights={"y": 10.0})
+    assert plain == pytest.approx(0.5)
+    assert weighted == pytest.approx(10/11, abs=1e-3)
+
+
+def test_predict_proba_weights_recover_class_signal_in_high_dim_config() -> None:
+    """T-26b core counterfactual — campaign 02 shape.
+
+    Reproduces the exact problem: a 12-knob config space where 2 fp8
+    STARTUP failures live in one neighbourhood (different other-knob
+    values from the query) and 2 ``auto`` SUCCESSES live near the query
+    on the other 11 knobs — matching what really happened in campaign
+    02 (warmstart configs auto-KEPT cluster on common values; fp8
+    surrogate fails come later in different regions).
+
+    Without weights, T-26's class collapse is diluted: the 2 auto
+    successes are ~the closest neighbours on 11 knobs, the fp8 fails
+    are far on those knobs. The 3-NN vote returns near-100% success →
+    classifier ACCEPTS the fp8 candidate (above
+    ``feasibility_threshold=0.4``), exactly mirroring the campaign-02
+    bug.
+
+    With knob_weights upweighting kv_cache_dtype 10x, the kvc signal
+    dominates: the fp8 fails are at distance ~0 on the 10x-weighted
+    knob, the auto successes are at distance 1.0 on it. Top-3 flips
+    to mostly fp8 fails → classifier REJECTS.
+    """
+    classes = {
+        "kv_cache_dtype": {
+            "fp8": "kv_fp8",
+            "fp8_e4m3": "kv_fp8",
+            "fp8_e5m2": "kv_fp8",
+        },
+    }
+    weights = {"kv_cache_dtype": 10.0}
+    threshold = 0.4  # matches example/qwen3-8b-l1-l2-l3-joint/config.yaml
+
+    def cfg(kvc: str, **rest: Any) -> dict[str, Any]:
+        return {"kv_cache_dtype": kvc, **rest}
+
+    # Auto SUCCESSES sit ON the query's other-knob values (warmstart cluster).
+    auto_other = {"k1": 4096, "k2": 0.88, "k3": "Z", "k4": True,
+                   "k5": 16, "k6": 256, "k7": 0.85, "k8": "C",
+                   "k9": 2048, "k10": 1024, "k11": "t"}
+    history = [
+        # Two fp8 STARTUP failures with other knobs FAR from the query.
+        (cfg("fp8_e4m3", k1=1024, k2=0.85, k3="X", k4=True,  k5=16, k6=128,
+                          k7=0.9,  k8="A", k9=4096, k10=2048, k11="r"),
+         False, FailureKind.STARTUP),
+        (cfg("fp8_e5m2", k1=2048, k2=0.92, k3="Y", k4=False, k5=32, k6=64,
+                          k7=0.8,  k8="B", k9=8192, k10=4096, k11="s"),
+         False, FailureKind.STARTUP),
+        # Two auto SUCCESSES sitting in the warmstart-cluster region.
+        (cfg("auto", **auto_other), True, None),
+        (cfg("auto", **auto_other), True, None),
+    ]
+    # Query: an unseen fp8 variant whose other knobs match the
+    # warmstart-cluster — this is what the surrogate actually proposes
+    # mid-run (TPE samples near successful regions).
+    query = cfg("fp8", **auto_other)
+
+    m_unweighted = FeasibilityModel(
+        k=3, min_observations=2, knob_classes=classes,
+    )
+    for c, ok, fk in history:
+        m_unweighted.record(c, success=ok, failure_kind=fk)
+    p_unw = m_unweighted.predict_proba(query)
+
+    m_weighted = FeasibilityModel(
+        k=3, min_observations=2, knob_classes=classes, knob_weights=weights,
+    )
+    for c, ok, fk in history:
+        m_weighted.record(c, success=ok, failure_kind=fk)
+    p_w = m_weighted.predict_proba(query)
+
+    # The campaign-02 bug: unweighted ACCEPTS the fp8 candidate
+    # (P(success) above threshold) because the auto SUCCESSES at the
+    # same other-knob region dominate the 3-NN vote.
+    assert p_unw >= threshold, (
+        f"unweighted classifier should ACCEPT the fp8 candidate at "
+        f"P(success) >= 0.4 — this is the campaign-02 bug being "
+        f"reproduced. Got P={p_unw:.3f}; if this drops below 0.4, the "
+        f"counterfactual no longer demonstrates the T-26b problem."
+    )
+    # T-26b fix: weighted REJECTS — kv_cache_dtype's 10x weight makes
+    # the fp8 cluster the closest neighbourhood on the structurally-
+    # decisive axis.
+    assert p_w < threshold, (
+        f"weighted classifier should REJECT the fp8 candidate at "
+        f"P(success) < 0.4. Got P={p_w:.3f}."
     )
 
 

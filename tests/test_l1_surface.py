@@ -10,6 +10,7 @@ from autoinfer.layers.l1_engine.surface import (
     build_vllm_serve_args,
     defaults,
     derive_knob_classes,
+    derive_knob_weights,
     load_catalog,
     to_surrogate_surface,
     violates_constraints,
@@ -183,6 +184,37 @@ def test_derive_knob_classes_skips_non_string_when_values() -> None:
     catalog = load_catalog(_REPO_CATALOG)
     classes = derive_knob_classes(catalog)
     assert "enable_chunked_prefill" not in classes
+
+
+def test_derive_knob_weights_upweights_compat_rule_knobs() -> None:
+    """T-26b: knobs appearing as when_knob/requires_knob in any compat
+    rule are deterministic feasibility predictors and get upweighted
+    so they dominate the per-knob distance average."""
+    catalog = load_catalog(_REPO_CATALOG)
+    weights = derive_knob_weights(catalog)
+    # kv_cache_dtype is when_knob in kv_fp8_requires_compatible_backend
+    assert weights["kv_cache_dtype"] == 10.0
+    # attention_backend is requires_knob in same rule
+    assert weights["attention_backend"] == 10.0
+    # enable_chunked_prefill is when_knob in chunked_prefill rule
+    assert weights["enable_chunked_prefill"] == 10.0
+    # max_num_batched_tokens is requires_knob in chunked_prefill rule
+    assert weights["max_num_batched_tokens"] == 10.0
+    # quantization is when_knob in quantization_none_means_literal_none rule
+    assert weights["quantization"] == 10.0
+    # Knobs NOT appearing in any rule are omitted (default 1.0 in
+    # _config_distance) so the dict stays sparse.
+    assert "gpu_memory_utilization" not in weights
+    assert "enable_prefix_caching" not in weights
+    assert "block_size" not in weights
+    assert "max_num_seqs" not in weights
+    assert "dtype" not in weights
+
+
+def test_derive_knob_weights_high_weight_param_threads_through() -> None:
+    catalog = load_catalog(_REPO_CATALOG)
+    weights = derive_knob_weights(catalog, high_weight=25.0)
+    assert weights["kv_cache_dtype"] == 25.0
 
 
 def test_unknown_knob_type_rejected(tmp_path: Path) -> None:

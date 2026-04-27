@@ -96,8 +96,9 @@ def _config_distance(
     b: dict[str, Any],
     *,
     knob_classes: dict[str, dict[str, str]] | None = None,
+    knob_weights: dict[str, float] | None = None,
 ) -> float:
-    """Sum of per-knob distances over the union of keys.
+    """Weighted-average per-knob distance over the union of keys, in [0, 1].
 
     Missing keys on either side count as distance 1 — penalises configs
     that explore knobs the other side doesn't set, since a structurally-
@@ -106,18 +107,35 @@ def _config_distance(
     ``knob_classes`` (knob_name -> value -> class_label) routes per-knob
     class taxonomies into ``_knob_distance`` so structurally-equivalent
     values collapse to distance 0.
+
+    ``knob_weights`` (knob_name -> weight) lets some knobs dominate the
+    distance computation. Default per-knob weight is 1.0 (= the legacy
+    plain-average behaviour). T-26b: campaign 02 evidence showed plain
+    averaging dilutes the per-knob class signal — the fp8-cluster
+    distance on ``kv_cache_dtype`` collapses to 0 via class collapse,
+    but averaging with 11 unrelated knobs at distance ~0.5 keeps the
+    overall distance at ~0.45, which doesn't reliably push P(success)
+    below ``feasibility_threshold=0.4``. Weighting knobs that
+    deterministically predict feasibility (e.g. ``kv_cache_dtype`` on
+    A100) ~10x higher restores the signal: weighted_avg(10*0 + 11*0.5)
+    / (10 + 11) ≈ 0.26, comfortably below threshold.
     """
     keys = set(a) | set(b)
     if not keys:
         return 0.0
-    total = 0.0
+    weighted_total = 0.0
+    weight_sum = 0.0
     for k in keys:
+        w = knob_weights.get(k, 1.0) if knob_weights else 1.0
+        weight_sum += w
         if k not in a or k not in b:
-            total += 1.0
+            weighted_total += w * 1.0
         else:
             cm = knob_classes.get(k) if knob_classes else None
-            total += _knob_distance(a[k], b[k], class_map=cm)
-    return total / len(keys)
+            weighted_total += w * _knob_distance(a[k], b[k], class_map=cm)
+    if weight_sum == 0.0:
+        return 0.0
+    return weighted_total / weight_sum
 
 
 @dataclass
@@ -152,6 +170,16 @@ class FeasibilityModel:
     generalises to ``fp8`` and ``fp8_e5m2`` when all three live in one
     class. Empty by default — the classifier falls back to plain
     per-value Hamming distance for unclassed knobs. T-26."""
+
+    knob_weights: dict[str, float] = field(default_factory=dict)
+    """Per-knob weights for the config-distance computation. Default
+    weight = 1.0 (plain-average behaviour). Knobs with weight > 1
+    dominate the weighted average so structural knobs (e.g.
+    ``kv_cache_dtype`` on A100, where fp8 is deterministically
+    incompatible with sm_80) carry their failure signal even when the
+    other ~11 knobs vary across surrogate proposals. T-26b: Campaign
+    02 evidence showed plain averaging diluted T-26's class collapse;
+    weighting catalog-rule knobs ~10x restores the reject signal."""
 
     _history: list[_Observation] = field(default_factory=list)
 
@@ -223,7 +251,12 @@ class FeasibilityModel:
         """
         scored = [
             (
-                _config_distance(config, obs.config, knob_classes=self.knob_classes),
+                _config_distance(
+                    config,
+                    obs.config,
+                    knob_classes=self.knob_classes,
+                    knob_weights=self.knob_weights,
+                ),
                 obs,
             )
             for obs in self._history
