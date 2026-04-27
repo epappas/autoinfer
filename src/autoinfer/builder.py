@@ -131,7 +131,7 @@ def _build_l1_spec(
         dataset_name=cfg.harness.driver.dataset_name,
         num_prompts=cfg.harness.driver.num_prompts,
     )
-    from autoinfer.layers.l1_engine import derive_knob_classes
+    from autoinfer.layers.l1_engine import derive_knob_classes, derive_knob_weights
 
     surrogate = _build_surrogate(
         cfg,
@@ -139,6 +139,7 @@ def _build_l1_spec(
         objective_axis="tokens_per_sec",
         maximize=True,
         knob_classes=derive_knob_classes(catalog),
+        knob_weights=derive_knob_weights(catalog),
     )
     warmstart = _build_warmstart(cfg.policy.warmstart, catalog)
 
@@ -367,6 +368,7 @@ def _build_surrogate(
     objective_axis: str,
     maximize: bool,
     knob_classes: dict[str, dict[str, str]] | None = None,
+    knob_weights: dict[str, float] | None = None,
 ) -> Surrogate:
     """Build the perf surrogate, optionally wrapped in feasibility constraint.
 
@@ -379,6 +381,11 @@ def _build_surrogate(
     ``knob_classes`` (T-26) lets callers inject structural value-to-class
     taxonomies — e.g. {fp8, fp8_e4m3, fp8_e5m2} as one class — so the
     classifier generalises a single failure across the whole class.
+
+    ``knob_weights`` (T-26b) lets callers upweight knobs that
+    deterministically predict feasibility (e.g. ``kv_cache_dtype`` on
+    A100). Without this, ``_config_distance`` averages across all knobs
+    and the per-knob class signal gets diluted by other knobs varying.
     """
     s_cfg = cfg.policy.surrogate
     inner = OptunaSurrogate(
@@ -396,6 +403,7 @@ def _build_surrogate(
             k=s_cfg.feasibility_k,
             min_observations=s_cfg.feasibility_min_observations,
             knob_classes=knob_classes or {},
+            knob_weights=knob_weights or {},
         ),
         threshold=s_cfg.feasibility_threshold,
         max_resamples=s_cfg.feasibility_max_resamples,
