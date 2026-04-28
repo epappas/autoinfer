@@ -390,6 +390,19 @@ class L3VllmKernelAdapter:
             str(self.candidate_port),
         ]
         argv.extend(self.extra_vllm_args)
+        # 1-GPU shared-mode cap (mirrors L1's AUTOINFER_L1_GMU_MAX). When
+        # the campaign_runner detects gpu_count==1, it sets this env var
+        # so candidate vLLM doesn't try to grab >TOTAL-reference% of HBM
+        # and OOM. Only inject if the caller didn't already pass an
+        # explicit --gpu-memory-utilization in extra_vllm_args.
+        cap_str = os.environ.get("AUTOINFER_L3_GMU_MAX")
+        if cap_str:
+            try:
+                cap = float(cap_str)
+            except ValueError:
+                cap = None
+            if cap is not None and "--gpu-memory-utilization" not in argv:
+                argv.extend(["--gpu-memory-utilization", str(cap)])
         return argv
 
     def _wait_ready(self) -> None:
