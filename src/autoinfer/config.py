@@ -97,6 +97,18 @@ class WarmstartConfig(_Base):
             "code emit can be long."
         ),
     )
+    timeout_s: float = Field(
+        default=120.0,
+        ge=10.0,
+        le=1800.0,
+        description=(
+            "Per-request HTTP read timeout for the chat-completion call. "
+            "Default 120s suits non-reasoning models on simple prompts. "
+            "Reasoning models (kimi-k2.6, o1/o3) generate reasoning_content "
+            "before content and can run 2-10 min on complex prompts; bump "
+            "to 300-600s for those."
+        ),
+    )
     n_configs: int = Field(ge=1, le=100, default=15)
     seed_configs: list[dict[str, Any]] | None = Field(
         default=None,
