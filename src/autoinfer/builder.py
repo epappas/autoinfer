@@ -368,6 +368,7 @@ def _build_operator(cfg: RunConfig, specs: Iterable[str]) -> Operator | None:
         api_key_env=cfg.policy.warmstart.api_key_env,
         temperature=cfg.policy.warmstart.temperature,
         max_tokens=cfg.policy.warmstart.max_tokens,
+        timeout_s=cfg.policy.warmstart.timeout_s,
         seed_configs=cfg.policy.warmstart.seed_configs,
         hardware_notes=cfg.policy.warmstart.hardware_notes,
     )
@@ -480,6 +481,7 @@ def _build_warmstart_with_seeds(
             api_key=_env_key(wcfg.api_key_env),
             temperature=wcfg.temperature,
             max_tokens=wcfg.max_tokens,
+            timeout_s=wcfg.timeout_s,
         )
     raise ValueError(f"unknown warmstart provider: {wcfg.provider!r}")
 

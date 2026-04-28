@@ -46,6 +46,10 @@ policy:
     llm_model: kimi-k2.6
     temperature: 1.0
     max_tokens: 8192
+    # Kimi-k2.6 reasoning models can take 2-10 min on complex prompts
+    # (large surface + history + 8K max_tokens). Default 120s isn't
+    # enough; bump to 600s.
+    timeout_s: 600.0
     n_configs: 4
     api_key_env: KIMI_API_KEY
     hardware_notes: |
