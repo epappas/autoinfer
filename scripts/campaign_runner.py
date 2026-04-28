@@ -2,8 +2,18 @@
 """Autoinfer campaign runner.
 
 Runs inside the Basilica deployment. Responsible for syncing extras,
-fetching the trace, starting the reference replica on GPU 1, running
-autoinfer on GPU 0, and summarizing the per-trial JSONs.
+fetching the trace, starting the reference replica, running
+autoinfer, and summarizing the per-trial JSONs.
+
+GPU placement is auto-detected:
+- 2+ GPUs: reference replica on GPU 1, autoinfer candidates on GPU 0
+  (independent — no contention; matches C01/C02 setup)
+- 1 GPU: reference replica and candidates time-share GPU 0. Reference
+  is constrained to ``--gpu-memory-utilization 0.40`` so the L1
+  candidate vLLMs (which spawn separately and use 0.85-0.92 of
+  remaining HBM by default) still fit. The reference's bench load is
+  ~16 GB for Qwen3-8B at bf16 (40% of an 80 GB A100 = 32 GB headroom),
+  candidates fit in the remainder.
 
 Separated from the bootstrap source because Basilica's deploy-time
 validator rejects larger Python payloads, so the bootstrap stays tiny
@@ -67,9 +77,49 @@ def prepare_data(workdir: Path) -> None:
     )
 
 
-def start_reference(workdir: Path, model: str, port: int) -> subprocess.Popen[bytes]:
+def detect_gpu_count() -> int:
+    """Return the number of GPUs visible to the container.
+
+    Tries ``nvidia-smi -L`` first (most reliable; doesn't require any
+    Python CUDA stack). Falls back to torch on failure. Returns 0 if
+    neither path can detect any GPUs.
+    """
+    try:
+        result = subprocess.run(
+            ["nvidia-smi", "-L"], capture_output=True, text=True, timeout=10,
+        )
+        if result.returncode == 0:
+            # One non-empty line per GPU.
+            lines = [ln for ln in result.stdout.splitlines() if ln.strip()]
+            return len(lines)
+    except (FileNotFoundError, subprocess.TimeoutExpired):
+        pass
+    try:
+        import torch
+        return torch.cuda.device_count()
+    except Exception:  # noqa: BLE001
+        return 0
+
+
+def start_reference(
+    workdir: Path, model: str, port: int, *, gpu_count: int
+) -> subprocess.Popen[bytes]:
     env = os.environ.copy()
-    env["CUDA_VISIBLE_DEVICES"] = "1"
+    if gpu_count >= 2:
+        # 2+ GPUs: reference on GPU 1, candidates on GPU 0 (independent).
+        env["CUDA_VISIBLE_DEVICES"] = "1"
+        gpu_mem_util = "0.85"
+    else:
+        # Single GPU: reference and candidates time-share index 0.
+        # Reference takes 40% so each L1 candidate (default
+        # gpu_memory_utilization 0.85-0.92) still fits in the remainder.
+        env["CUDA_VISIBLE_DEVICES"] = "0"
+        gpu_mem_util = "0.40"
+    log(
+        f"reference replica placement: gpu_count={gpu_count} "
+        f"CUDA_VISIBLE_DEVICES={env['CUDA_VISIBLE_DEVICES']} "
+        f"gpu_memory_utilization={gpu_mem_util}"
+    )
     log_path = workdir / "runs" / "reference.log"
     log_path.parent.mkdir(parents=True, exist_ok=True)
     out = log_path.open("wb")
@@ -78,7 +128,7 @@ def start_reference(workdir: Path, model: str, port: int) -> subprocess.Popen[by
             "uv", "run", "vllm", "serve", model,
             "--port", str(port),
             "--dtype", "auto",
-            "--gpu-memory-utilization", "0.85",
+            "--gpu-memory-utilization", gpu_mem_util,
         ],
         env=env, cwd=str(workdir), stdout=out, stderr=subprocess.STDOUT,
     )
@@ -96,14 +146,22 @@ def run_autoinfer(
     config: str,
     max_trials: int | None,
     layer_trials: list[str],
+    *,
+    gpu_count: int,
 ) -> int:
     env = os.environ.copy()
+    # Candidates always run on GPU 0. With 2+ GPUs, the reference is on
+    # GPU 1 (no contention). With 1 GPU, reference shares GPU 0 with
+    # candidates — start_reference reserved 40% of HBM for the reference,
+    # leaving 60% for candidate vLLMs whose default gpu_memory_utilization
+    # (0.85-0.92) computes against that remainder.
     env["CUDA_VISIBLE_DEVICES"] = "0"
     cmd = ["uv", "run", "autoinfer", "run", config]
     if max_trials is not None:
         cmd.extend(["--max-trials", str(max_trials)])
     for lt in layer_trials:
         cmd.extend(["--layer-trials", lt])
+    log(f"candidate placement: gpu_count={gpu_count} CUDA_VISIBLE_DEVICES=0")
     log(f"running: {' '.join(cmd)}")
     result = subprocess.run(cmd, env=env, cwd=str(workdir))
     log(f"autoinfer exit code: {result.returncode}")
@@ -160,9 +218,19 @@ def main() -> int:
     else:
         prepare_data(workdir)
 
-    ref_proc = start_reference(workdir, args.model, args.ref_port)
+    gpu_count = detect_gpu_count()
+    log(f"detected gpu_count={gpu_count}")
+    if gpu_count == 0:
+        log("ERROR: no GPUs detected — campaign cannot run")
+        return 2
+    ref_proc = start_reference(
+        workdir, args.model, args.ref_port, gpu_count=gpu_count,
+    )
     try:
-        code = run_autoinfer(workdir, args.config, args.max_trials, args.layer_trials)
+        code = run_autoinfer(
+            workdir, args.config, args.max_trials, args.layer_trials,
+            gpu_count=gpu_count,
+        )
         summarize(workdir)
     finally:
         log("terminating reference replica")
