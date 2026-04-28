@@ -77,7 +77,7 @@ def _parse_args() -> argparse.Namespace:
     p.add_argument("--branch", default="main")
     p.add_argument("--repo", default="https://github.com/epappas/autoinfer.git")
     p.add_argument("--model", default="Qwen/Qwen3-8B")
-    p.add_argument("--image", default="pytorch/pytorch:2.4.1-cuda12.4-cudnn9-runtime")
+    p.add_argument("--image", default="vllm/vllm-openai:latest")
     p.add_argument("--gpus", type=int, default=2)
     p.add_argument("--cpu", default="4", help="CPU allocation, e.g. '4' or '500m'.")
     p.add_argument("--memory", default="64Gi")

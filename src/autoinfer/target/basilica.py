@@ -216,7 +216,16 @@ class CampaignSpec:
     def build_deploy_kwargs(
         self,
         name: str,
-        image: str = "pytorch/pytorch:2.4.1-cuda12.4-cudnn9-runtime",
+        # Default image switched 2026-04-28 from
+        # pytorch/pytorch:2.4.1-cuda12.4-cudnn9-runtime (Docker Hub) to
+        # vllm/vllm-openai:latest after the prior image started producing
+        # GPU-less containers on Basilica's runtime ("0 active driver(s)
+        # found"). The vllm/vllm-openai image is what BasilicaClient.
+        # deploy_vllm uses internally and is empirically working with
+        # Basilica's nvidia-container-runtime; it is Ubuntu-based so
+        # our apt-based bootstrap (git/ca-certs/build-essential) still
+        # works on top.
+        image: str = "vllm/vllm-openai:latest",
         gpu_count: int = 2,
         memory: str = "64Gi",
         storage: bool = True,
