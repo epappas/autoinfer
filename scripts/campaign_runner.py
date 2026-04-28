@@ -162,9 +162,11 @@ def run_autoinfer(
         # 0.55 = 60% of GPU minus a small safety margin (vLLM's own
         # auto-grow + cudagraph capture) so the candidate doesn't trip
         # the OOM watchdog when the reference is concurrently serving
-        # gate prompts.
+        # gate prompts. Set for both L1 (read by build_vllm_serve_args)
+        # and L3 (read by L3VllmKernelAdapter._build_vllm_argv).
         env["AUTOINFER_L1_GMU_MAX"] = "0.55"
-        log("AUTOINFER_L1_GMU_MAX=0.55 (1-GPU mode; candidate gmu clamped)")
+        env["AUTOINFER_L3_GMU_MAX"] = "0.55"
+        log("AUTOINFER_{L1,L3}_GMU_MAX=0.55 (1-GPU mode; candidate gmu clamped)")
     cmd = ["uv", "run", "autoinfer", "run", config]
     if max_trials is not None:
         cmd.extend(["--max-trials", str(max_trials)])
