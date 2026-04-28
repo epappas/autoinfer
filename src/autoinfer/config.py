@@ -73,6 +73,30 @@ class WarmstartConfig(_Base):
     llm_model: str = Field(description="Policy LLM id, e.g. 'claude-opus-4-7'.")
     base_url: str | None = Field(default=None, description="Used when provider='openai_compatible'.")
     api_key_env: str | None = Field(default=None, description="Env var name holding the API key.")
+    temperature: float = Field(
+        default=0.3,
+        ge=0.0,
+        le=2.0,
+        description=(
+            "Sampling temperature for the chat-completion call. Default "
+            "0.3 (low) for reproducibility on knob proposals. Some "
+            "models reject specific values — e.g. kimi-k2.6 only accepts "
+            "1.0; set explicitly per-campaign to match the chosen "
+            "provider's constraints."
+        ),
+    )
+    max_tokens: int = Field(
+        default=4096,
+        ge=64,
+        le=65536,
+        description=(
+            "max_tokens cap on the chat-completion response. Includes any "
+            "model-side reasoning_content (e.g. kimi-k2.6 returns ~170 "
+            "tokens of reasoning even for trivial replies). Bump above "
+            "the default for L3 kernel-proposal prompts where source-"
+            "code emit can be long."
+        ),
+    )
     n_configs: int = Field(ge=1, le=100, default=15)
     seed_configs: list[dict[str, Any]] | None = Field(
         default=None,
