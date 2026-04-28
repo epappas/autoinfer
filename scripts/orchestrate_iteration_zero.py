@@ -131,6 +131,7 @@ def _build_spec(args: argparse.Namespace) -> CampaignSpec:
         "ANTHROPIC_API_KEY",
         "OPENAI_API_KEY",
         "OPENROUTER_API_KEY",
+        "KIMI_API_KEY",
         "BASILICA_API_TOKEN",
     ):
         val = os.environ.get(var)
