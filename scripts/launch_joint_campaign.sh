@@ -58,7 +58,13 @@ done
 fail() { echo "ERROR: $*" >&2; exit 1; }
 
 [[ -n "${BASILICA_API_TOKEN:-}" ]] || fail "BASILICA_API_TOKEN not set"
-[[ -n "${OPENROUTER_API_KEY:-}" ]] || fail "OPENROUTER_API_KEY not set"
+# At least one LLM provider key must be set. The orchestrator passes
+# all known keys through; the campaign config picks which provider.
+LLM_KEY_SET="no"
+for var in OPENROUTER_API_KEY ANTHROPIC_API_KEY OPENAI_API_KEY KIMI_API_KEY; do
+    if [[ -n "${!var:-}" ]]; then LLM_KEY_SET="yes"; fi
+done
+[[ "$LLM_KEY_SET" == "yes" ]] || fail "No LLM provider key set (need one of: OPENROUTER_API_KEY, ANTHROPIC_API_KEY, OPENAI_API_KEY, KIMI_API_KEY)"
 [[ -f "$CONFIG" ]] || fail "config not found: $CONFIG"
 
 # Auto-detect which layers the config enables — affects smoke trial caps.
@@ -114,7 +120,13 @@ echo "  branch:        ${BRANCH:-main (orchestrator default)}"
 echo "  gpu-models:    ${GPU_MODELS:-(any matching min-gpu-memory-gb)}"
 echo "  gpus:          ${GPUS:-2 (orchestrator default)}"
 echo "  spot:          ${SPOT:-auto (orchestrator default)}"
-echo "  creds present: BASILICA_API_TOKEN OPENROUTER_API_KEY${HF_TOKEN:+ HF_TOKEN}"
+CREDS="BASILICA_API_TOKEN"
+[[ -n "${OPENROUTER_API_KEY:-}" ]] && CREDS="$CREDS OPENROUTER_API_KEY"
+[[ -n "${ANTHROPIC_API_KEY:-}" ]] && CREDS="$CREDS ANTHROPIC_API_KEY"
+[[ -n "${OPENAI_API_KEY:-}" ]]    && CREDS="$CREDS OPENAI_API_KEY"
+[[ -n "${KIMI_API_KEY:-}" ]]      && CREDS="$CREDS KIMI_API_KEY"
+[[ -n "${HF_TOKEN:-}" ]]          && CREDS="$CREDS HF_TOKEN"
+echo "  creds present: $CREDS"
 echo
 
 if [[ "$YES" != "yes" ]]; then
