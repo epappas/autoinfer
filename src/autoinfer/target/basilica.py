@@ -271,6 +271,7 @@ class CampaignSpec:
             "image": image,
             "port": self.artifacts_port,
             "gpu_count": gpu_count,
+            "min_gpu_memory_gb": min_gpu_memory_gb,
             "memory": memory,
             "storage": storage,
             "ttl_seconds": ttl_seconds,
@@ -278,27 +279,22 @@ class CampaignSpec:
             "env": env,
             "health_check": health,
         }
-        # Only pass min_gpu_memory_gb when gpu_models is NOT set. The two
-        # filters AND together in Basilica's scheduler — combining them
-        # produces an over-constrained query that gets stuck in
-        # "scheduling" even when nodes matching gpu_models alone exist.
-        # The L2 adapter's successful H100 deploys via ``deploy_vllm``
-        # only pass ``gpu_models`` and let the model name carry the
-        # implicit memory expectation (H100 = 80 GB, etc.). We mirror
-        # that pattern here. Two failed Campaign 03 H100 deploys
-        # (2026-04-27) sat 30 min in scheduling each before timing out
-        # with this combined filter; without min_gpu_memory_gb the
-        # gpu_models=["H100"] query alone schedules successfully.
+        # Pass both gpu_models AND min_gpu_memory_gb when gpu_models is
+        # set. PR #8 (2026-04-27) dropped min_gpu_memory_gb under the
+        # hypothesis that the AND-combination over-constrained Basilica's
+        # scheduler. Empirically wrong: H200 + A100 deploys post-PR-#8
+        # got to bootstrap but the container had NO GPU attached
+        # ("Triton is installed but 0 active driver(s) found"), causing
+        # vLLM's pynvml.nvmlDeviceGetHandleByIndex(0) to fail with
+        # NVMLError_InvalidArgument. Basilica's gpu_models filter alone
+        # constrains node TYPE without actually allocating a GPU
+        # resource — min_gpu_memory_gb is what triggers the resource
+        # request. The H100 scheduling stalls observed pre-PR-#8 were a
+        # separate H100-capacity issue, not over-constraint. Re-add
+        # min_gpu_memory_gb to restore the C01/C02-working deploy
+        # behaviour.
         if gpu_models:
             kwargs["gpu_models"] = list(gpu_models)
-        else:
-            kwargs["min_gpu_memory_gb"] = min_gpu_memory_gb
         if spot is not None:
-            # Explicitly request spot or on-demand. Default None lets
-            # Basilica's scheduler pick (whichever it prefers, sometimes
-            # ambiguous when both are available) — for deterministic
-            # scheduling on tight markets (H100 / H200) prefer
-            # spot=False to force on-demand listings, which are pricier
-            # but reliably bookable.
             kwargs["spot"] = spot
         return kwargs
