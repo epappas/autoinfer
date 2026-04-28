@@ -36,11 +36,18 @@ harness:
 
 policy:
   warmstart:
+    # Kimi 2.6 (Moonshot AI). OpenAI-compatible API at api.moonshot.ai.
+    # kimi-k2.6 emits reasoning_content alongside content — temperature
+    # is locked to 1.0 by the model and reasoning consumes ~150-300
+    # tokens of headroom even for trivial replies, so max_tokens is
+    # bumped to 8192 to fit kernel-proposal source-code emit.
     provider: openai_compatible
-    base_url: https://openrouter.ai/api/v1
-    llm_model: anthropic/claude-sonnet-4
+    base_url: https://api.moonshot.ai/v1
+    llm_model: kimi-k2.6
+    temperature: 1.0
+    max_tokens: 8192
     n_configs: 4
-    api_key_env: OPENROUTER_API_KEY
+    api_key_env: KIMI_API_KEY
     hardware_notes: |
       Joint L1 x L2 x L3 search on Qwen3-8B + ShareGPT.
 
@@ -104,7 +111,10 @@ policy:
     rungs: [100, 500]
     eta: 3
   operator:
-    llm_model: anthropic/claude-sonnet-4
+    # Same provider as warmstart — uses warmstart's base_url, api_key_env,
+    # temperature, max_tokens. llm_model can differ but for kimi-k2.6 we
+    # match it directly.
+    llm_model: kimi-k2.6
     cadence: 4
 
 layers:

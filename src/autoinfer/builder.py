@@ -366,6 +366,8 @@ def _build_operator(cfg: RunConfig, specs: Iterable[str]) -> Operator | None:
         llm_model=cfg.policy.operator.llm_model,
         base_url=cfg.policy.warmstart.base_url,
         api_key_env=cfg.policy.warmstart.api_key_env,
+        temperature=cfg.policy.warmstart.temperature,
+        max_tokens=cfg.policy.warmstart.max_tokens,
         seed_configs=cfg.policy.warmstart.seed_configs,
         hardware_notes=cfg.policy.warmstart.hardware_notes,
     )
@@ -476,6 +478,8 @@ def _build_warmstart_with_seeds(
         return OpenAICompatibleProposalLLM(
             base_url=wcfg.base_url, model=wcfg.llm_model,
             api_key=_env_key(wcfg.api_key_env),
+            temperature=wcfg.temperature,
+            max_tokens=wcfg.max_tokens,
         )
     raise ValueError(f"unknown warmstart provider: {wcfg.provider!r}")
 
