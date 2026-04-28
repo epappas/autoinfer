@@ -153,9 +153,18 @@ def run_autoinfer(
     # Candidates always run on GPU 0. With 2+ GPUs, the reference is on
     # GPU 1 (no contention). With 1 GPU, reference shares GPU 0 with
     # candidates — start_reference reserved 40% of HBM for the reference,
-    # leaving 60% for candidate vLLMs whose default gpu_memory_utilization
-    # (0.85-0.92) computes against that remainder.
+    # so candidates must cap their gpu_memory_utilization to fit in the
+    # remaining 60%. vLLM treats --gpu-memory-utilization as % of TOTAL
+    # GPU memory (not remainder), so the surrogate's default sweep
+    # [0.80, 0.95] OOMs in 1-GPU mode without the cap.
     env["CUDA_VISIBLE_DEVICES"] = "0"
+    if gpu_count == 1:
+        # 0.55 = 60% of GPU minus a small safety margin (vLLM's own
+        # auto-grow + cudagraph capture) so the candidate doesn't trip
+        # the OOM watchdog when the reference is concurrently serving
+        # gate prompts.
+        env["AUTOINFER_L1_GMU_MAX"] = "0.55"
+        log("AUTOINFER_L1_GMU_MAX=0.55 (1-GPU mode; candidate gmu clamped)")
     cmd = ["uv", "run", "autoinfer", "run", config]
     if max_trials is not None:
         cmd.extend(["--max-trials", str(max_trials)])

@@ -13,6 +13,7 @@ Pure logic; no subprocess or network.
 
 from __future__ import annotations
 
+import os
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
@@ -197,6 +198,36 @@ def violates_constraints(config: dict[str, Any], catalog: KnobCatalog) -> list[s
     return out
 
 
+_GMU_CAP_ENV = "AUTOINFER_L1_GMU_MAX"
+
+
+def _maybe_cap_gpu_memory_utilization(name: str, value: Any) -> Any:
+    """Clamp candidate ``gpu_memory_utilization`` to the env-var cap.
+
+    When ``AUTOINFER_L1_GMU_MAX`` is set in the environment, candidate
+    vLLM's gpu_memory_utilization is clamped to ``min(value, cap)``.
+    Used in 1-GPU mode where the reference replica shares the GPU with
+    each candidate — the campaign_runner sets the cap so the candidate
+    leaves room for the reference's HBM reservation.
+
+    vLLM interprets ``--gpu-memory-utilization`` as a fraction of the
+    GPU's TOTAL memory (not remainder), so the surrogate's default
+    sweep [0.80, 0.95] OOMs when the reference is also resident.
+    """
+    if name != "gpu_memory_utilization":
+        return value
+    cap_str = os.environ.get(_GMU_CAP_ENV)
+    if not cap_str:
+        return value
+    try:
+        cap = float(cap_str)
+    except ValueError:
+        return value
+    if not isinstance(value, (int, float)):
+        return value
+    return min(float(value), cap)
+
+
 def build_vllm_serve_args(
     model: str, port: int, config: dict[str, Any], catalog: KnobCatalog
 ) -> tuple[list[str], dict[str, str]]:
@@ -207,6 +238,8 @@ def build_vllm_serve_args(
         knob = catalog.knobs.get(name)
         if knob is None:
             continue
+        # Clamp candidate gpu_memory_utilization in 1-GPU shared-mode.
+        value = _maybe_cap_gpu_memory_utilization(name, value)
         if knob.vllm_env:
             env[knob.vllm_env] = str(value)
             continue

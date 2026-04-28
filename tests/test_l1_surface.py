@@ -121,6 +121,53 @@ def test_build_args_unknown_keys_ignored() -> None:
     assert "totally_not_a_knob" not in " ".join(args)
 
 
+def test_build_args_gmu_cap_clamps_above_threshold(monkeypatch: pytest.MonkeyPatch) -> None:
+    """1-GPU mode: env-var cap clamps candidate gpu_memory_utilization."""
+    monkeypatch.setenv("AUTOINFER_L1_GMU_MAX", "0.55")
+    catalog = load_catalog(_REPO_CATALOG)
+    args, _ = build_vllm_serve_args(
+        "m", 8000, {"gpu_memory_utilization": 0.92}, catalog
+    )
+    # Find the value passed after --gpu-memory-utilization
+    idx = args.index("--gpu-memory-utilization")
+    assert float(args[idx + 1]) == pytest.approx(0.55)
+
+
+def test_build_args_gmu_cap_does_not_raise_below(monkeypatch: pytest.MonkeyPatch) -> None:
+    """A proposal already below the cap is passed through unchanged."""
+    monkeypatch.setenv("AUTOINFER_L1_GMU_MAX", "0.55")
+    catalog = load_catalog(_REPO_CATALOG)
+    args, _ = build_vllm_serve_args(
+        "m", 8000, {"gpu_memory_utilization": 0.40}, catalog
+    )
+    idx = args.index("--gpu-memory-utilization")
+    assert float(args[idx + 1]) == pytest.approx(0.40)
+
+
+def test_build_args_no_gmu_cap_when_env_unset(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Default behaviour (env var unset): proposed gmu passes through."""
+    monkeypatch.delenv("AUTOINFER_L1_GMU_MAX", raising=False)
+    catalog = load_catalog(_REPO_CATALOG)
+    args, _ = build_vllm_serve_args(
+        "m", 8000, {"gpu_memory_utilization": 0.92}, catalog
+    )
+    idx = args.index("--gpu-memory-utilization")
+    assert float(args[idx + 1]) == pytest.approx(0.92)
+
+
+def test_build_args_gmu_cap_invalid_env_falls_back_to_proposal(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """If AUTOINFER_L1_GMU_MAX is non-numeric, fall back to the proposal."""
+    monkeypatch.setenv("AUTOINFER_L1_GMU_MAX", "notanumber")
+    catalog = load_catalog(_REPO_CATALOG)
+    args, _ = build_vllm_serve_args(
+        "m", 8000, {"gpu_memory_utilization": 0.92}, catalog
+    )
+    idx = args.index("--gpu-memory-utilization")
+    assert float(args[idx + 1]) == pytest.approx(0.92)
+
+
 def test_violates_constraints_fp8_requires_good_backend() -> None:
     catalog = load_catalog(_REPO_CATALOG)
     bad = {"kv_cache_dtype": "fp8", "attention_backend": "XFORMERS"}
