@@ -225,6 +225,7 @@ class CampaignSpec:
         min_gpu_memory_gb: int = 40,
         gpu_models: list[str] | None = None,
         spot: bool | None = None,
+        cpu: str = "4",
     ) -> dict[str, Any]:
         """Return kwargs for ``BasilicaClient.deploy``.
 
@@ -270,6 +271,7 @@ class CampaignSpec:
             "source": self.build_source(),
             "image": image,
             "port": self.artifacts_port,
+            "cpu": cpu,
             "gpu_count": gpu_count,
             "min_gpu_memory_gb": min_gpu_memory_gb,
             "memory": memory,
