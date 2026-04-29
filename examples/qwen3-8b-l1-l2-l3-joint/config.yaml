@@ -36,22 +36,21 @@ harness:
 
 policy:
   warmstart:
-    # Moonshot AI (Kimi). OpenAI-compatible API at api.moonshot.ai.
-    # Switched from kimi-k2.6 → moonshot-v1-128k after C03's Q campaign
-    # showed kimi-k2.6's reasoning_content consumes 30K+ tokens before
-    # any content emit (entire 8192 max_tokens spent on reasoning,
-    # finish_reason=length, content empty → all L3 paired-control NOV
-    # calls fell back to reference). moonshot-v1-128k is non-reasoning,
-    # returns content directly in 2-3 seconds with parseable delimited
-    # blocks for the L3 kernel-emit prompts.
+    # OpenRouter Sonnet 4 — back to the C02-working model after C03-R
+    # showed moonshot-v1-128k emits parseable kernel blocks but with
+    # buggy code (5/7 NOVs misused @triton.jit, 1/7 misused
+    # @torch.jit.script, 1/7 missed float32 upcast). Sonnet 4 is
+    # code-specialized; it produced the +14.7% rmsnorm/fp16/large NOV
+    # win in C02. Anthropic models are accessed through OpenRouter's
+    # OpenAI-compatible endpoint here.
     provider: openai_compatible
-    base_url: https://api.moonshot.ai/v1
-    llm_model: moonshot-v1-128k
+    base_url: https://openrouter.ai/api/v1
+    llm_model: anthropic/claude-sonnet-4
     temperature: 0.3
     max_tokens: 4096
     timeout_s: 120.0
     n_configs: 4
-    api_key_env: KIMI_API_KEY
+    api_key_env: OPENROUTER_API_KEY
     hardware_notes: |
       Joint L1 x L2 x L3 search on Qwen3-8B + ShareGPT.
 
@@ -115,9 +114,9 @@ policy:
     rungs: [100, 500]
     eta: 3
   operator:
-    # Match warmstart's provider/model; non-reasoning kimi handles
-    # both knob proposals (L1/L2) and kernel emit (L3 paired-control).
-    llm_model: moonshot-v1-128k
+    # Match warmstart's provider/model — Sonnet 4 is code-capable for
+    # both L1/L2 knob proposals and L3 kernel emit.
+    llm_model: anthropic/claude-sonnet-4
     cadence: 4
 
 layers:
