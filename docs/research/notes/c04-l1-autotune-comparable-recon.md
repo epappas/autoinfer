@@ -11,15 +11,40 @@ This document is a recon log — the pre-flight scope. End of doc has
 the **decision** (write pre-reg now / write pre-reg after pre-flight
 work / abandon) plus the explicit pre-flight ticket list.
 
-**Why now:** Campaign 03's v3 audit (2026-04-30) ruled out the
-single-shot Sonnet 4 Triton rmsnorm kernel as a production win on
-Qwen3-8B + A100 (vLLM-native CUDA is 1.06–1.65× faster). The L3
-kernel-novelty thesis at small auxiliary ops is falsified at this
-op×model×hardware. The remaining citable-win path for the framework is
-**L1 vs the published vLLM auto-tuner.** If autoinfer-L1 doesn't beat
-`benchmarks/auto_tune` on its own published target, the framework has
-no defensible win at all. Issue #2 already pins the work; this recon
-maps it to concrete tickets.
+**Why now (and what this campaign is NOT):** The autoinfer thesis is
+**joint three-layer search Pareto-dominates per-layer specialist tools**
+(L1 = engine config, L2 = topology, L3 = kernel; cf. hypothesis-seed
+section "AutoKernel solves only the bottom layer. This is where
+autoinfer can claim novelty — joint search across layers, not just
+kernel tuning"). All three layers stay in scope from day one (P1
+invariant). C04 is **the next-most-tractable per-layer comparable**, not
+a redefinition of the project.
+
+What C03 v3 actually closed out: **one specific L3 instantiation** —
+single-shot Sonnet 4 Triton, rmsnorm surface, Qwen3-8B, A100, no
+post-emission autotune. That's one op × one model × one hardware × one
+code-emission strategy. **The L3 axis is not falsified**; T-21
+(attention surface, ~70% of compute) and T-32 (stronger code model /
+post-emission autotune sweep / less-optimised kernel surfaces) are open
+paths with structurally different win ceilings.
+
+What's still alive in each layer after C03:
+- **L1** — direction validated (surrogate kept-rate moved 8% → ~20%
+  with T-26b); needs auto_tune head-to-head (this campaign) to be
+  citable against a published baseline.
+- **L2** — architecture works (C03-S has L2 entries on the joint
+  Pareto at 663.5 tok/s); cross-hardware + multi-replica +
+  PD-disagg untested (Q3 deferred; Issue #3 router prereq).
+- **L3** — one instantiation closed; multiple paths open via T-21 +
+  T-32. Joint Pareto frontier from C03-S still has L3 entries
+  dominating the high-throughput regime (1200-1211 tok/s).
+
+C04 is the cheapest, most-comparable next campaign. Issue #2 already
+pins the work; this recon maps it to concrete tickets. **The choice of
+C04 is tactical** — it's the campaign with the lowest cost-to-evidence
+ratio given the current state of the harness — not strategic. The
+three-layer thesis remains the north star; C05+ is where T-21 / T-32 /
+Issue #3 / Issue #1 work plays out.
 
 ---
 
