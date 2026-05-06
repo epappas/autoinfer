@@ -23,7 +23,7 @@ autoinfer = "autoinfer.cli:app"
 [project.optional-dependencies]
 basilica = ["basilica-sdk>=0.20"]
 policy = ["optuna>=3.5"]
-vllm = ["vllm>=0.7"]
+vllm = ["vllm>=0.20.0"]
 llm = ["anthropic>=0.50"]
 l3 = ["torch>=2.1"]
 dev = [
