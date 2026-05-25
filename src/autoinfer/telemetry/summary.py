@@ -10,6 +10,7 @@ Writes three companion files alongside ``ledger/trials/``:
 from __future__ import annotations
 
 import csv
+import hashlib
 import json
 import os
 import platform
@@ -37,6 +38,47 @@ def capture_hw_context() -> dict[str, Any]:
     ctx["torch_version"] = _pip_show("torch")
     ctx["autoinfer_version"] = _pip_show("autoinfer")
     return ctx
+
+
+def compute_file_sha256(path: Path, *, chunk_bytes: int = 1 << 20) -> str | None:
+    """Stream-hash a file with SHA-256; return None if absent or unreadable.
+
+    T-35. Used to pin the ShareGPT shard (or any workload corpus) at
+    run-start so reproductions can verify they read the same bytes.
+    Chunked read (default 1 MiB) avoids reading whole multi-GB shards
+    into RAM.
+    """
+    if not path.exists() or not path.is_file():
+        return None
+    h = hashlib.sha256()
+    try:
+        with path.open("rb") as f:
+            while True:
+                chunk = f.read(chunk_bytes)
+                if not chunk:
+                    break
+                h.update(chunk)
+    except OSError:
+        return None
+    return h.hexdigest()
+
+
+def capture_corpus_info(path: Path) -> dict[str, Any]:
+    """Snapshot dataset path + sha256 + size for the run record. T-35.
+
+    Returns a JSON-serialisable dict. ``path`` is stringified so the
+    record survives a relative-path reference becoming stale. Missing
+    files surface as ``sha256=None`` / ``size_bytes=None`` so the run
+    still writes a record (the absence is itself a finding).
+    """
+    info: dict[str, Any] = {"path": str(path)}
+    sha = compute_file_sha256(path)
+    info["sha256"] = sha
+    try:
+        info["size_bytes"] = path.stat().st_size if path.exists() else None
+    except OSError:
+        info["size_bytes"] = None
+    return info
 
 
 def _git_sha() -> str | None:

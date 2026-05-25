@@ -7,7 +7,9 @@
 from autoinfer.telemetry.events import EventLog
 from autoinfer.telemetry.summary import (
     build_run_summary,
+    capture_corpus_info,
     capture_hw_context,
+    compute_file_sha256,
     write_hw_context,
     write_results_tsv,
     write_run_summary,
@@ -16,7 +18,9 @@ from autoinfer.telemetry.summary import (
 __all__ = [
     "EventLog",
     "build_run_summary",
+    "capture_corpus_info",
     "capture_hw_context",
+    "compute_file_sha256",
     "write_hw_context",
     "write_results_tsv",
     "write_run_summary",

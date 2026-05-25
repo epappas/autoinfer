@@ -105,3 +105,24 @@ def test_slo_e2e_p99_ms_zero_or_negative_rejected() -> None:
     raw["harness"]["driver"]["slo_e2e_p99_ms"] = 0.0  # type: ignore[index]
     with pytest.raises(ValidationError):
         RunConfig.model_validate(raw)
+
+
+def test_bench_seed_defaults_to_none() -> None:
+    """T-35: deterministic bench seed opt-in (default unset)."""
+    run = RunConfig.model_validate(_minimal_raw())
+    assert run.harness.driver.bench_seed is None
+
+
+def test_bench_seed_accepts_non_negative_int() -> None:
+    raw = _minimal_raw()
+    raw["harness"]["driver"]["bench_seed"] = 0  # type: ignore[index]
+    assert RunConfig.model_validate(raw).harness.driver.bench_seed == 0
+    raw["harness"]["driver"]["bench_seed"] = 42  # type: ignore[index]
+    assert RunConfig.model_validate(raw).harness.driver.bench_seed == 42
+
+
+def test_bench_seed_negative_rejected() -> None:
+    raw = _minimal_raw()
+    raw["harness"]["driver"]["bench_seed"] = -1  # type: ignore[index]
+    with pytest.raises(ValidationError):
+        RunConfig.model_validate(raw)
