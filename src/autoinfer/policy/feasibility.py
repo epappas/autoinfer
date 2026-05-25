@@ -181,6 +181,29 @@ class FeasibilityModel:
     02 evidence showed plain averaging diluted T-26's class collapse;
     weighting catalog-rule knobs ~10x restores the reject signal."""
 
+    kind_weights: dict[FailureKind, dict[str, float]] = field(default_factory=dict)
+    """Per-FailureKind knob weights. ``{kind: {knob_name: weight}}``.
+
+    T-26c. C03-S Q2 evidence: L1 surrogate kept-rate stalled at ~20%
+    (target ≥30%) because T-26b's shared ``knob_weights`` averages over
+    mixed-kind history — OOM-region signal at ``gpu_memory_utilization``
+    gets diluted by QUALITY_KL-region signal at ``quantization`` when
+    both share the same shared weight vector. Per-kind weights let each
+    kind's k-NN sharpen its in-region signal: a candidate at the
+    OOM-region's heart gets ``P(fail OOM) ≈ 1`` under the OOM-tuned
+    distance, even when its ``quantization`` knob (irrelevant to OOM)
+    differs from prior OOM-failed configs.
+
+    Aggregation: ``predict_proba`` returns ``1 - max_K P(fail K)``.
+    Kinds are mutually exclusive by construction (``failure_kind`` is
+    either ``None`` or a single enum value), so the max kind-wise
+    failure probability is the right rejection criterion.
+
+    Backward compat: empty dict (default) reproduces the T-26b path
+    byte-for-byte — the aggregate success fraction over shared
+    ``knob_weights``. Kinds missing from this dict fall back to
+    ``self.knob_weights`` inside ``_predict_proba_for_kind``."""
+
     _history: list[_Observation] = field(default_factory=list)
 
     def record(
@@ -202,13 +225,28 @@ class FeasibilityModel:
     def predict_proba(self, config: dict[str, Any]) -> float:
         """Return the model's estimate of ``P(success | config)``.
 
-        Inverse-distance-weighted vote of the k nearest neighbors. Output
-        is in ``[0.0, 1.0]``: 1.0 = "every nearby observation succeeded",
-        0.0 = "every nearby observation failed."
+        Two paths:
+
+        - **T-26b (default).** When ``kind_weights`` is empty, returns the
+          inverse-distance-weighted success fraction of the k nearest
+          neighbours under the shared ``knob_weights``. 1.0 = every nearby
+          observation succeeded; 0.0 = every nearby observation failed.
+        - **T-26c.** When ``kind_weights`` is populated, returns
+          ``1 - max_K P(fail K)`` where each ``P(fail K)`` is the k-NN
+          fail-rate under that kind's own knob weights. Sharper rejection
+          at failure-region centres without over-rejecting configs that
+          merely sit near unrelated failure regions.
         """
         if len(self._history) < self.min_observations:
             return 1.0
-        return self._weighted_vote(config, predicate=lambda o: o.success)
+        if not self.kind_weights:
+            return self._weighted_vote(config, predicate=lambda o: o.success)
+        max_fail = 0.0
+        for kind in FailureKind:
+            p_fail = self._predict_proba_for_kind(config, kind)
+            if p_fail > max_fail:
+                max_fail = p_fail
+        return 1.0 - max_fail
 
     def predict_kind_proba(self, config: dict[str, Any]) -> dict[FailureKind, float]:
         """Per-failure-kind probability among the k nearest failed neighbors.
@@ -216,16 +254,40 @@ class FeasibilityModel:
         Useful for diagnostics ("this region tends to OOM" vs "tends to
         fail QUALITY_KL"); the surrogate doesn't have to use this — it
         can route on aggregate ``predict_proba`` alone.
+
+        When ``kind_weights`` is populated, each kind's probability is
+        computed under that kind's own per-knob weights (T-26c). When
+        empty, all kinds share ``self.knob_weights`` (T-26b path).
         """
         if len(self._history) < self.min_observations:
             return {}
         out: dict[FailureKind, float] = {}
         for kind in FailureKind:
-            out[kind] = self._weighted_vote(
-                config,
-                predicate=lambda o, _k=kind: o.failure_kind == _k,
-            )
+            if self.kind_weights:
+                out[kind] = self._predict_proba_for_kind(config, kind)
+            else:
+                out[kind] = self._weighted_vote(
+                    config,
+                    predicate=lambda o, _k=kind: o.failure_kind == _k,
+                )
         return out
+
+    def _predict_proba_for_kind(
+        self, config: dict[str, Any], kind: FailureKind
+    ) -> float:
+        """Fail-probability for one kind under that kind's knob weights.
+
+        T-26c. Falls back to ``self.knob_weights`` when the kind has no
+        entry in ``self.kind_weights`` — keeps kinds without a static
+        driver (e.g. UNKNOWN, HANG) routed through the shared weights
+        instead of plain averaging.
+        """
+        weights = self.kind_weights.get(kind, self.knob_weights)
+        return self._weighted_vote(
+            config,
+            predicate=lambda o, _k=kind: o.failure_kind == _k,
+            knob_weights=weights,
+        )
 
     def n_observations(self) -> int:
         return len(self._history)
@@ -240,6 +302,8 @@ class FeasibilityModel:
         self,
         config: dict[str, Any],
         predicate: Any,
+        *,
+        knob_weights: dict[str, float] | None = None,
     ) -> float:
         """Inverse-distance-weighted fraction of k-NN matching ``predicate``.
 
@@ -248,14 +312,19 @@ class FeasibilityModel:
         2. Pick the ``k`` smallest.
         3. Weight = 1 / max(distance, distance_floor).
         4. Return sum(weight where predicate) / sum(weight).
+
+        ``knob_weights`` overrides ``self.knob_weights`` for the distance
+        computation when provided (T-26c per-kind routing). When ``None``,
+        the shared ``self.knob_weights`` is used (T-26b behaviour).
         """
+        weights = knob_weights if knob_weights is not None else self.knob_weights
         scored = [
             (
                 _config_distance(
                     config,
                     obs.config,
                     knob_classes=self.knob_classes,
-                    knob_weights=self.knob_weights,
+                    knob_weights=weights,
                 ),
                 obs,
             )

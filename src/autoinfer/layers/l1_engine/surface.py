@@ -20,6 +20,8 @@ from typing import Any
 
 import yaml
 
+from autoinfer.harness.failure import FailureKind
+
 _KNOB_TYPES = {"int", "float", "categorical", "bool"}
 
 
@@ -183,6 +185,88 @@ def derive_knob_weights(
     knobs_in_rules = {rule.when_knob for rule in catalog.constraints}
     knobs_in_rules |= {rule.requires_knob for rule in catalog.constraints}
     return {name: high_weight for name in catalog.knobs if name in knobs_in_rules}
+
+
+_KIND_DRIVERS: dict[FailureKind, frozenset[str]] = {
+    FailureKind.OOM: frozenset(
+        {
+            "kv_cache_dtype",
+            "gpu_memory_utilization",
+            "max_num_seqs",
+            "max_num_batched_tokens",
+            "block_size",
+            "long_prefill_token_threshold",
+        }
+    ),
+    FailureKind.QUALITY_KL: frozenset(
+        {
+            "quantization",
+            "dtype",
+            "kv_cache_dtype",
+        }
+    ),
+    FailureKind.QUALITY_INVARIANCE: frozenset(
+        {
+            "max_num_seqs",
+            "block_size",
+            "enable_chunked_prefill",
+        }
+    ),
+}
+"""Static per-FailureKind driver knobs for T-26c.
+
+Each entry lists the knobs whose values drive the failure region for
+that kind. ``derive_kind_weights`` upweights these knobs ~10x inside
+the per-kind sub-classifier so it learns the right region.
+
+STARTUP is treated separately: STARTUP failures are
+catalog-rule-violation events (e.g. fp8 on sm_80), so its driver knobs
+are derived from the catalog's compat-rule footprint, mirroring
+``derive_knob_weights`` from T-26b.
+
+Kinds not in this table (UNKNOWN, HANG, NCCL) fall back to
+``self.knob_weights`` inside ``_predict_proba_for_kind`` — they share
+the shared T-26b weights instead of getting per-kind sharpening, which
+is the right default until enough HANG/NCCL data exists to justify
+specialised drivers.
+"""
+
+
+def derive_kind_weights(
+    catalog: KnobCatalog, *, high_weight: float = 10.0
+) -> dict[FailureKind, dict[str, float]]:
+    """Build per-FailureKind knob weights from a static driver taxonomy. T-26c.
+
+    For each kind in ``_KIND_DRIVERS``, upweight any catalog knob in
+    that kind's driver set to ``high_weight``. STARTUP is derived from
+    the catalog's compat-rule footprint (``when_knob`` ∪
+    ``requires_knob``), so a new catalog rule automatically extends
+    STARTUP's reach without code changes.
+
+    Kinds whose driver set has no overlap with the catalog are omitted
+    — ``FeasibilityModel._predict_proba_for_kind`` falls back to
+    ``self.knob_weights`` for those kinds, which is the right T-26b
+    behaviour.
+
+    Future work (T-26d) can extend this by data-mining per-kind priors
+    from accumulated trial history once the catalog is mature.
+    """
+    out: dict[FailureKind, dict[str, float]] = {}
+    catalog_knob_names = set(catalog.knobs.keys())
+    for kind, drivers in _KIND_DRIVERS.items():
+        weights = {
+            name: high_weight for name in drivers if name in catalog_knob_names
+        }
+        if weights:
+            out[kind] = weights
+    rule_knobs = {rule.when_knob for rule in catalog.constraints}
+    rule_knobs |= {rule.requires_knob for rule in catalog.constraints}
+    startup_weights = {
+        name: high_weight for name in catalog.knobs if name in rule_knobs
+    }
+    if startup_weights:
+        out[FailureKind.STARTUP] = startup_weights
+    return out
 
 
 def violates_constraints(config: dict[str, Any], catalog: KnobCatalog) -> list[str]:

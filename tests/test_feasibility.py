@@ -485,3 +485,462 @@ def test_distance_floor_prevents_division_blowup() -> None:
     assert math.isfinite(p)
     # 1 of 2 succeeded; weighted vote gives 0.5
     assert p == pytest.approx(0.5)
+
+
+# ---------------------------------------------------------------------------
+# T-26c — per-FailureKind sub-classifier tests.
+# ---------------------------------------------------------------------------
+
+
+def test_predict_proba_backward_compat_no_kind_weights() -> None:
+    """Empty kind_weights reproduces T-26b: shared knob_weights, aggregate vote.
+
+    Pinning bit-for-bit equivalence between an unset kind_weights and the
+    pre-T-26c behaviour ensures T-26c is purely additive — existing
+    deployments that never populate kind_weights see no behavioural drift.
+    """
+    weights = {"x": 5.0}
+    classes = {"k": {"a": "A", "b": "A"}}
+
+    def fill(model: FeasibilityModel) -> None:
+        model.record(
+            {"x": 1, "k": "a"},
+            success=False,
+            failure_kind=FailureKind.STARTUP,
+        )
+        model.record(
+            {"x": 2, "k": "b"},
+            success=False,
+            failure_kind=FailureKind.OOM,
+        )
+        model.record({"x": 8, "k": "c"}, success=True)
+        model.record({"x": 9, "k": "c"}, success=True)
+
+    m_t26b = FeasibilityModel(
+        k=3,
+        min_observations=2,
+        knob_classes=classes,
+        knob_weights=weights,
+    )
+    fill(m_t26b)
+    m_t26c_empty = FeasibilityModel(
+        k=3,
+        min_observations=2,
+        knob_classes=classes,
+        knob_weights=weights,
+        kind_weights={},
+    )
+    fill(m_t26c_empty)
+    query = {"x": 1, "k": "a"}
+    assert m_t26c_empty.predict_proba(query) == m_t26b.predict_proba(query)
+    assert m_t26c_empty.predict_kind_proba(query) == m_t26b.predict_kind_proba(query)
+
+
+def test_predict_proba_per_kind_rejects_oom_region_with_memory_drivers() -> None:
+    """T-26c core counterfactual.
+
+    Memory-knob OOM region: 3 OOM failures with high
+    gpu_memory_utilization / max_num_seqs / max_num_batched_tokens /
+    block_size; 3 successes with low values. Other knobs (precision,
+    attention) vary freely across observations.
+
+    Query: matches OOM-region on memory knobs, matches SUCCESS on
+    catalog-rule knobs (kv_cache_dtype / attention_backend / quantization
+    / enable_chunked_prefill).
+
+    Under T-26b shared weights (catalog-rule knobs upweighted 10x,
+    memory knobs default weight 1), the upweighted catalog-rule knobs
+    pull the candidate toward SUCCESS history — P(success) stays high
+    and the OOM-region candidate is NOT rejected.
+
+    Under T-26c with OOM driver weights (memory knobs upweighted 10x),
+    the candidate is exact on the OOM-tuned distance to OOM-fail history
+    and far from SUCCESS history on those same knobs. P(fail OOM) → ~1,
+    so P(success) = 1 − max_K P(fail K) drops below 0.3.
+    """
+    shared_weights = {
+        "kv_cache_dtype": 10.0,
+        "attention_backend": 10.0,
+        "quantization": 10.0,
+        "enable_chunked_prefill": 10.0,
+    }
+    oom_weights = {
+        "gpu_memory_utilization": 10.0,
+        "max_num_seqs": 10.0,
+        "max_num_batched_tokens": 10.0,
+        "block_size": 10.0,
+    }
+
+    def cfg(
+        *,
+        gmu: float,
+        seqs: int,
+        batched: int,
+        block: int,
+        quant: str,
+        attn: str,
+        chunked: bool,
+    ) -> dict[str, Any]:
+        return {
+            "gpu_memory_utilization": gmu,
+            "max_num_seqs": seqs,
+            "max_num_batched_tokens": batched,
+            "block_size": block,
+            "kv_cache_dtype": "auto",
+            "quantization": quant,
+            "attention_backend": attn,
+            "enable_chunked_prefill": chunked,
+        }
+
+    oom_a = cfg(gmu=0.95, seqs=512, batched=8192, block=32,
+                quant="awq", attn="FLASH_ATTN", chunked=True)
+    oom_b = cfg(gmu=0.95, seqs=512, batched=8192, block=32,
+                quant="gptq", attn="FLASHINFER", chunked=False)
+    oom_c = cfg(gmu=0.95, seqs=512, batched=8192, block=32,
+                quant="fp8", attn="TRITON_ATTN", chunked=True)
+    ok_a = cfg(gmu=0.82, seqs=64, batched=2048, block=16,
+               quant="none", attn="FLASH_ATTN", chunked=True)
+    ok_b = cfg(gmu=0.82, seqs=64, batched=2048, block=16,
+               quant="none", attn="FLASH_ATTN", chunked=True)
+    ok_c = cfg(gmu=0.82, seqs=64, batched=2048, block=16,
+               quant="none", attn="FLASH_ATTN", chunked=True)
+    query = cfg(gmu=0.95, seqs=512, batched=8192, block=32,
+                quant="none", attn="FLASH_ATTN", chunked=True)
+
+    def fill(model: FeasibilityModel) -> None:
+        for c in (oom_a, oom_b, oom_c):
+            model.record(c, success=False, failure_kind=FailureKind.OOM)
+        for c in (ok_a, ok_b, ok_c):
+            model.record(c, success=True)
+
+    m_t26b = FeasibilityModel(
+        k=3, min_observations=2, knob_weights=shared_weights,
+    )
+    fill(m_t26b)
+    p_t26b = m_t26b.predict_proba(query)
+    m_t26c = FeasibilityModel(
+        k=3,
+        min_observations=2,
+        knob_weights=shared_weights,
+        kind_weights={FailureKind.OOM: oom_weights},
+    )
+    fill(m_t26c)
+    p_t26c = m_t26c.predict_proba(query)
+
+    assert p_t26b > 0.5, (
+        f"T-26b shared weights should fail to reject the OOM-region "
+        f"candidate (the bug T-26c targets). Got P={p_t26b:.3f}; if this "
+        f"drops below 0.5, the counterfactual no longer demonstrates "
+        f"T-26c's value."
+    )
+    assert p_t26c < 0.3, (
+        f"T-26c OOM sub-classifier should reject the OOM-region "
+        f"candidate at P(success) < 0.3. Got P={p_t26c:.3f}."
+    )
+
+
+def test_predict_proba_per_kind_does_not_overreject_unrelated_regions() -> None:
+    """T-26c safety: a candidate far from every failure region survives.
+
+    Same history as the OOM-region test; query matches SUCCESS on the
+    OOM-driver knobs (memory) and ALSO on catalog-rule knobs. Under
+    T-26c the OOM sub-classifier sees the candidate at distance ~1 to
+    OOM-failures on every weighted knob → P(fail OOM) low; STARTUP /
+    QUALITY_* sub-classifiers ditto. max_K stays low → P(success) > 0.7.
+    """
+    oom_weights = {
+        "gpu_memory_utilization": 10.0,
+        "max_num_seqs": 10.0,
+        "max_num_batched_tokens": 10.0,
+        "block_size": 10.0,
+    }
+    quality_kl_weights = {
+        "quantization": 10.0,
+        "dtype": 10.0,
+        "kv_cache_dtype": 10.0,
+    }
+    m = FeasibilityModel(
+        k=3,
+        min_observations=2,
+        kind_weights={
+            FailureKind.OOM: oom_weights,
+            FailureKind.QUALITY_KL: quality_kl_weights,
+        },
+    )
+    for _ in range(3):
+        m.record(
+            {
+                "gpu_memory_utilization": 0.95,
+                "max_num_seqs": 512,
+                "max_num_batched_tokens": 8192,
+                "block_size": 32,
+                "kv_cache_dtype": "auto",
+                "quantization": "awq",
+                "dtype": "bfloat16",
+            },
+            success=False,
+            failure_kind=FailureKind.OOM,
+        )
+    for _ in range(3):
+        m.record(
+            {
+                "gpu_memory_utilization": 0.82,
+                "max_num_seqs": 64,
+                "max_num_batched_tokens": 2048,
+                "block_size": 16,
+                "kv_cache_dtype": "auto",
+                "quantization": "none",
+                "dtype": "auto",
+            },
+            success=True,
+        )
+    query = {
+        "gpu_memory_utilization": 0.82,
+        "max_num_seqs": 64,
+        "max_num_batched_tokens": 2048,
+        "block_size": 16,
+        "kv_cache_dtype": "auto",
+        "quantization": "none",
+        "dtype": "auto",
+    }
+    p = m.predict_proba(query)
+    assert p > 0.7, (
+        f"candidate in the centre of the success cluster must survive "
+        f"per-kind sub-classifiers; got P(success)={p:.3f}"
+    )
+
+
+def test_kind_weights_overrides_shared_knob_weights_per_kind() -> None:
+    """T-26c routing: per-kind weights take precedence over shared weights
+    for that kind; missing kinds fall back to the shared weights.
+
+    Two FailureKind columns: OOM (in kind_weights) and STARTUP (not in
+    kind_weights — falls back to self.knob_weights). The query lies in
+    the OOM region only when distance is computed under OOM-specific
+    weights; the same query under the shared knob_weights places it
+    closer to STARTUP-failed neighbours.
+
+    Asserts _predict_proba_for_kind picks each kind's weight vector
+    correctly.
+    """
+    shared = {"shared_knob": 10.0}
+    oom_only = {"oom_knob": 10.0}
+    m = FeasibilityModel(
+        k=3,
+        min_observations=2,
+        knob_weights=shared,
+        kind_weights={FailureKind.OOM: oom_only},
+    )
+    m.record(
+        {"oom_knob": 1.0, "shared_knob": 0.0, "filler": 0.0},
+        success=False,
+        failure_kind=FailureKind.OOM,
+    )
+    m.record(
+        {"oom_knob": 1.0, "shared_knob": 0.0, "filler": 0.0},
+        success=False,
+        failure_kind=FailureKind.OOM,
+    )
+    m.record(
+        {"oom_knob": 0.0, "shared_knob": 1.0, "filler": 0.0},
+        success=False,
+        failure_kind=FailureKind.STARTUP,
+    )
+    m.record(
+        {"oom_knob": 0.0, "shared_knob": 1.0, "filler": 0.0},
+        success=False,
+        failure_kind=FailureKind.STARTUP,
+    )
+    m.record({"oom_knob": 5.0, "shared_knob": 5.0, "filler": 5.0}, success=True)
+    m.record({"oom_knob": 5.0, "shared_knob": 5.0, "filler": 5.0}, success=True)
+
+    query = {"oom_knob": 1.0, "shared_knob": 1.0, "filler": 5.0}
+    p_fail_oom = m._predict_proba_for_kind(query, FailureKind.OOM)
+    p_fail_startup = m._predict_proba_for_kind(query, FailureKind.STARTUP)
+    assert p_fail_oom > 0.7, (
+        f"OOM sub-classifier should latch onto oom_knob=1.0 match; "
+        f"got P(fail OOM)={p_fail_oom:.3f}"
+    )
+    assert p_fail_startup > 0.7, (
+        f"STARTUP sub-classifier (fallback to shared weights, "
+        f"shared_knob=10x) should latch onto shared_knob=1.0 match; "
+        f"got P(fail STARTUP)={p_fail_startup:.3f}"
+    )
+    p = m.predict_proba(query)
+    assert p < 0.3, (
+        f"either OOM or STARTUP sub-classifier rejects → P(success) low; "
+        f"got P={p:.3f}"
+    )
+
+
+def test_predict_kind_proba_uses_kind_weights() -> None:
+    """T-26c: predict_kind_proba routes through per-kind weights when set."""
+    oom_weights = {"oom_knob": 10.0}
+    m_shared = FeasibilityModel(k=3, min_observations=2)
+    m_perkind = FeasibilityModel(
+        k=3,
+        min_observations=2,
+        kind_weights={FailureKind.OOM: oom_weights},
+    )
+    for model in (m_shared, m_perkind):
+        model.record(
+            {"oom_knob": 1.0, "filler": 0.0},
+            success=False,
+            failure_kind=FailureKind.OOM,
+        )
+        model.record(
+            {"oom_knob": 1.0, "filler": 10.0},
+            success=False,
+            failure_kind=FailureKind.OOM,
+        )
+        model.record({"oom_knob": 5.0, "filler": 0.0}, success=True)
+        model.record({"oom_knob": 5.0, "filler": 10.0}, success=True)
+
+    query = {"oom_knob": 1.0, "filler": 5.0}
+    pk_shared = m_shared.predict_kind_proba(query)
+    pk_perkind = m_perkind.predict_kind_proba(query)
+    # Per-kind weights sharpen OOM signal: candidate's oom_knob matches
+    # both OOM failures, but under uniform weights `filler` dilutes the
+    # match. Under the per-kind 10x oom_knob weight, the match dominates.
+    assert pk_perkind[FailureKind.OOM] > pk_shared[FailureKind.OOM]
+    assert pk_perkind[FailureKind.OOM] > 0.95
+
+
+# ---------------------------------------------------------------------------
+# T-26c — derive_kind_weights static-taxonomy tests.
+# ---------------------------------------------------------------------------
+
+
+def _toy_catalog():  # type: ignore[no-untyped-def]
+    """Minimal KnobCatalog covering the static-taxonomy entries."""
+    from autoinfer.layers.l1_engine.surface import (
+        CompatRule,
+        KnobCatalog,
+        KnobSpec,
+    )
+
+    def kspec(name: str, type_: str = "categorical") -> KnobSpec:
+        return KnobSpec(name=name, type=type_, default=None)
+
+    knobs = {
+        name: kspec(name)
+        for name in (
+            "kv_cache_dtype",
+            "gpu_memory_utilization",
+            "max_num_seqs",
+            "max_num_batched_tokens",
+            "block_size",
+            "quantization",
+            "dtype",
+            "enable_chunked_prefill",
+            "attention_backend",
+        )
+    }
+    constraints = (
+        CompatRule(
+            rule="kv_fp8_requires_compatible_backend",
+            description="",
+            when_knob="kv_cache_dtype",
+            when_values=("fp8", "fp8_e4m3", "fp8_e5m2"),
+            requires_knob="attention_backend",
+            requires_values=("FLASHINFER", "FLASH_ATTN"),
+        ),
+        CompatRule(
+            rule="chunked_prefill_bound",
+            description="",
+            when_knob="enable_chunked_prefill",
+            when_values=(False,),
+            requires_knob="max_num_batched_tokens",
+            requires_values=(32768,),
+        ),
+    )
+    return KnobCatalog(knobs=knobs, constraints=constraints)
+
+
+def test_derive_kind_weights_static_taxonomy() -> None:
+    """OOM / QUALITY_KL / QUALITY_INVARIANCE weights come from the static
+    driver taxonomy, restricted to catalog knobs."""
+    from autoinfer.layers.l1_engine.surface import derive_kind_weights
+
+    catalog = _toy_catalog()
+    out = derive_kind_weights(catalog, high_weight=10.0)
+
+    assert set(out[FailureKind.OOM].keys()) == {
+        "kv_cache_dtype",
+        "gpu_memory_utilization",
+        "max_num_seqs",
+        "max_num_batched_tokens",
+        "block_size",
+    }
+    assert all(v == 10.0 for v in out[FailureKind.OOM].values())
+
+    assert set(out[FailureKind.QUALITY_KL].keys()) == {
+        "quantization",
+        "dtype",
+        "kv_cache_dtype",
+    }
+    assert set(out[FailureKind.QUALITY_INVARIANCE].keys()) == {
+        "max_num_seqs",
+        "block_size",
+        "enable_chunked_prefill",
+    }
+
+
+def test_derive_kind_weights_startup_mining_from_compat_rules() -> None:
+    """STARTUP drivers = union of when_knob / requires_knob across rules."""
+    from autoinfer.layers.l1_engine.surface import derive_kind_weights
+
+    catalog = _toy_catalog()
+    out = derive_kind_weights(catalog, high_weight=10.0)
+    assert set(out[FailureKind.STARTUP].keys()) == {
+        "kv_cache_dtype",
+        "attention_backend",
+        "enable_chunked_prefill",
+        "max_num_batched_tokens",
+    }
+    assert all(v == 10.0 for v in out[FailureKind.STARTUP].values())
+
+
+def test_derive_kind_weights_omits_kinds_with_no_catalog_overlap() -> None:
+    """A kind whose driver set doesn't intersect the catalog is omitted;
+    the per-kind sub-classifier falls back to self.knob_weights for it."""
+    from autoinfer.layers.l1_engine.surface import (
+        KnobCatalog,
+        KnobSpec,
+        derive_kind_weights,
+    )
+
+    knobs = {"foo": KnobSpec(name="foo", type="categorical", default=None)}
+    catalog = KnobCatalog(knobs=knobs, constraints=())
+    out = derive_kind_weights(catalog)
+    assert FailureKind.OOM not in out
+    assert FailureKind.QUALITY_KL not in out
+    assert FailureKind.STARTUP not in out
+    assert out == {}
+
+
+def test_derive_kind_weights_real_catalog_smoke() -> None:
+    """Real L1 catalog produces a non-empty mapping for OOM/QUALITY_*/STARTUP."""
+    from pathlib import Path
+
+    from autoinfer.layers.l1_engine.surface import (
+        derive_kind_weights,
+        load_catalog,
+    )
+
+    repo_root = Path(__file__).resolve().parents[1]
+    catalog = load_catalog(repo_root / "src/autoinfer/layers/l1_engine/knobs.yaml")
+    out = derive_kind_weights(catalog)
+    for kind in (
+        FailureKind.OOM,
+        FailureKind.QUALITY_KL,
+        FailureKind.QUALITY_INVARIANCE,
+        FailureKind.STARTUP,
+    ):
+        assert kind in out, f"{kind!r} missing from real-catalog kind_weights"
+        assert out[kind], f"{kind!r} weights empty"
+        for knob_name, weight in out[kind].items():
+            assert knob_name in catalog.knobs, (
+                f"derived weight references unknown knob {knob_name!r}"
+            )
+            assert weight == 10.0
