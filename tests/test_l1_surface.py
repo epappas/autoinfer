@@ -264,6 +264,96 @@ def test_derive_knob_weights_high_weight_param_threads_through() -> None:
     assert weights["kv_cache_dtype"] == 25.0
 
 
+def test_long_prefill_token_threshold_in_catalog() -> None:
+    """T-33: vLLM V1 chunked-prefill threshold present in surface."""
+    catalog = load_catalog(_REPO_CATALOG)
+    assert "long_prefill_token_threshold" in catalog.knobs
+    knob = catalog.knobs["long_prefill_token_threshold"]
+    assert knob.type == "categorical"
+    assert knob.values == (1024, 2048, 4096, 8192)
+    assert knob.vllm_cli == "--long-prefill-token-threshold"
+    assert "enable_chunked_prefill" in knob.coupled_with
+    assert "max_num_batched_tokens" in knob.coupled_with
+
+
+def test_long_prefill_token_threshold_build_args_emits_cli() -> None:
+    catalog = load_catalog(_REPO_CATALOG)
+    args, _ = build_vllm_serve_args(
+        "m", 8000, {"long_prefill_token_threshold": 4096}, catalog
+    )
+    assert "--long-prefill-token-threshold" in args
+    i = args.index("--long-prefill-token-threshold")
+    assert args[i + 1] == "4096"
+
+
+def test_enforce_eager_in_catalog() -> None:
+    """T-33: enforce_eager toggles CUDA graph capture."""
+    catalog = load_catalog(_REPO_CATALOG)
+    assert "enforce_eager" in catalog.knobs
+    knob = catalog.knobs["enforce_eager"]
+    assert knob.type == "bool"
+    assert knob.default is False
+    assert knob.vllm_cli_enable == "--enforce-eager"
+    assert knob.vllm_cli_disable == "--no-enforce-eager"
+
+
+def test_enforce_eager_build_args_emits_enable_flag() -> None:
+    catalog = load_catalog(_REPO_CATALOG)
+    args, _ = build_vllm_serve_args(
+        "m", 8000, {"enforce_eager": True}, catalog
+    )
+    assert "--enforce-eager" in args
+    assert "--no-enforce-eager" not in args
+
+
+def test_enforce_eager_build_args_emits_disable_flag() -> None:
+    catalog = load_catalog(_REPO_CATALOG)
+    args, _ = build_vllm_serve_args(
+        "m", 8000, {"enforce_eager": False}, catalog
+    )
+    assert "--no-enforce-eager" in args
+    assert "--enforce-eager" not in args
+
+
+def test_t33_knobs_do_not_regress_derive_knob_weights_or_classes() -> None:
+    """Adding T-33 knobs must not change weight/class derivation for
+    existing knobs. ``long_prefill_token_threshold`` has no compat rule
+    in this catalog (the threshold is an int range; the chunked-prefill
+    interaction is left for the FeasibilityModel to learn from data),
+    so neither knob should appear in derive_knob_weights' output."""
+    catalog = load_catalog(_REPO_CATALOG)
+    weights = derive_knob_weights(catalog)
+    classes = derive_knob_classes(catalog)
+    # Existing knobs still upweighted.
+    assert weights["kv_cache_dtype"] == 10.0
+    assert weights["attention_backend"] == 10.0
+    assert weights["enable_chunked_prefill"] == 10.0
+    assert weights["max_num_batched_tokens"] == 10.0
+    assert weights["quantization"] == 10.0
+    # New knobs not in any compat rule → sparse-dict behaviour preserved.
+    assert "long_prefill_token_threshold" not in weights
+    assert "enforce_eager" not in weights
+    # Class taxonomy unchanged (no new string-valued compat rules).
+    assert "long_prefill_token_threshold" not in classes
+    assert "enforce_eager" not in classes
+
+
+def test_t33_kind_weights_pick_up_long_prefill_under_oom() -> None:
+    """T-26c kind_weights taxonomy lists long_prefill_token_threshold as
+    an OOM driver; T-33 added the knob to the catalog, so it must now
+    appear in OOM weights without changing other kinds."""
+    from autoinfer.harness.failure import FailureKind
+    from autoinfer.layers.l1_engine.surface import derive_kind_weights
+
+    catalog = load_catalog(_REPO_CATALOG)
+    kw = derive_kind_weights(catalog)
+    assert "long_prefill_token_threshold" in kw[FailureKind.OOM]
+    assert kw[FailureKind.OOM]["long_prefill_token_threshold"] == 10.0
+    assert "long_prefill_token_threshold" not in kw[FailureKind.QUALITY_KL]
+    assert "long_prefill_token_threshold" not in kw[FailureKind.QUALITY_INVARIANCE]
+    assert "long_prefill_token_threshold" not in kw.get(FailureKind.STARTUP, {})
+
+
 def test_unknown_knob_type_rejected(tmp_path: Path) -> None:
     path = tmp_path / "bad.yaml"
     path.write_text("knobs:\n  x:\n    type: weird\n    default: 1\n")

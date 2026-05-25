@@ -113,6 +113,38 @@ knobs:
     axis: memory
     description: Weight-quantization scheme applied at load time.
 
+  long_prefill_token_threshold:
+    type: categorical
+    values: [1024, 2048, 4096, 8192]
+    default: 2048
+    vllm_cli: --long-prefill-token-threshold
+    coupled_with: [enable_chunked_prefill, max_num_batched_tokens]
+    axis: latency
+    description: |
+      Per-step prefill-token budget for chunked prefill (positive int,
+      tokens per step per vLLM V1 contract). Caps prefill tokens per
+      scheduling iteration so decodes are not starved by long prompts.
+      V1 chunked-prefill knob (raw doc 07-vllm-v1-architecture.md §3);
+      auto_tune searches this axis as one of its primary scheduling
+      levers. Inactive when enable_chunked_prefill=False — pass-through
+      ignored by vLLM in that mode (no explicit constraint added to
+      keep the catalog simple; the feasibility classifier learns the
+      interaction from data).
+
+  enforce_eager:
+    type: bool
+    default: false
+    vllm_cli_enable: --enforce-eager
+    vllm_cli_disable: --no-enforce-eager
+    coupled_with: [attention_backend]
+    axis: startup
+    description: |
+      Disable CUDA graph capture and torch.compile. False = capture
+      graphs at startup (slower init, faster steady-state); True =
+      pure-eager dispatch (faster init, slower steady-state, useful
+      when graphs conflict with custom attention backends or for
+      debugging compile failures). V1 raw doc §7.
+
 constraints:
   - rule: kv_fp8_requires_compatible_backend
     description: FP8 KV dtypes require FLASHINFER or FLASH_ATTN.
