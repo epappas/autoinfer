@@ -176,6 +176,42 @@ def test_bench_seed_threaded_to_l1_adapter(tmp_path: Path) -> None:
     assert l1_adapter.bench_seed == 17  # type: ignore[attr-defined]
 
 
+def test_determinism_threaded_to_l1_adapter_and_event(tmp_path: Path) -> None:
+    """T-36: harness.determinism populates L1EngineAdapter + event log."""
+    import json
+
+    raw = _raw_joint(tmp_path)
+    raw["harness"]["determinism"] = {
+        "seed": 11,
+        "batch_invariant": False,
+        "multiprocessing_v1": False,
+    }
+    cfg = RunConfig.model_validate(raw)
+    runner, _ = build_runner(cfg)
+    l1 = runner.scheduler.specs["l1_engine"].adapter
+    assert l1.multiprocessing_v1 is False  # type: ignore[attr-defined]
+    assert l1.enforce_batch_invariance is False  # type: ignore[attr-defined]
+
+    events_file = tmp_path / "runs" / "events.jsonl"
+    lines = [json.loads(ln) for ln in events_file.read_text().splitlines() if ln.strip()]
+    config_loaded = next(ln for ln in lines if ln.get("type") == "config_loaded")
+    assert config_loaded["determinism"] == {
+        "seed": 11,
+        "batch_invariant": False,
+        "multiprocessing_v1": False,
+    }
+
+
+def test_determinism_defaults_preserve_legacy_behaviour(tmp_path: Path) -> None:
+    """No determinism block in YAML → defaults; adapter keeps batch-invariance
+    enforcement on and MP-V1 enabled."""
+    cfg = RunConfig.model_validate(_raw_joint(tmp_path))
+    runner, _ = build_runner(cfg)
+    l1 = runner.scheduler.specs["l1_engine"].adapter
+    assert l1.multiprocessing_v1 is True  # type: ignore[attr-defined]
+    assert l1.enforce_batch_invariance is True  # type: ignore[attr-defined]
+
+
 def test_corpus_info_captured_into_hw_context_and_event(tmp_path: Path) -> None:
     """T-35: trace_path sha256 is computed at run-start and recorded in
     both hw_context.json and the config_loaded event, so reproduction
