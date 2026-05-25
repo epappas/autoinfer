@@ -27,6 +27,7 @@ _MAXIMIZE_AXES: frozenset[str] = frozenset(
     {
         "tokens_per_sec",
         "goodput",
+        "goodput_req_per_sec",
         "tokens_per_dollar",
     }
 )

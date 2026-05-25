@@ -84,11 +84,20 @@ def _kl_percentiles(per_prompt_kl: tuple[float, ...]) -> dict[str, float]:
 def compose_measurement(
     driver: DriverResult, gate: GateResult, peak_hbm_gb: float
 ) -> Measurement:
-    """Build a ``Measurement`` from driver + gate results. Pure."""
+    """Build a ``Measurement`` from driver + gate results. Pure.
+
+    ``extra["goodput"]`` is the canonical goodput axis (legacy alias);
+    T-34 adds the more descriptive ``extra["goodput_req_per_sec"]`` so
+    downstream tools that select on goodput-under-SLO have a clearly-
+    named field. Both fields carry the same value to keep older
+    analysers working.
+    """
+    goodput = driver.goodput_req_per_sec
     extra = {
         "ttft_p50_ms": driver.ttft_ms.get("p50", 0.0),
         "tpot_p50_ms": driver.tpot_ms.get("p50", 0.0),
-        "goodput": driver.goodput_req_per_sec,
+        "goodput": goodput,
+        "goodput_req_per_sec": goodput,
         "max_kl": gate.max_kl,
     }
     extra.update(_kl_percentiles(gate.per_prompt_kl))
@@ -120,6 +129,15 @@ class L1EngineAdapter:
     dataset_name: str = "random"
     num_prompts: int = 64
     gate_concurrency: int = 4
+    goodput_slo_ms: dict[str, float] | None = None
+    """Optional ``{TTFT|TPOT|E2E -> ms}`` SLO passed to ``vllm bench
+    serve --goodput``. When set, ``driver.goodput_req_per_sec`` measures
+    "requests meeting all SLOs per second" instead of falling through to
+    raw throughput. T-34."""
+    bench_seed: int | None = None
+    """Deterministic ``vllm bench serve`` request-generator seed. T-35
+    partial: the L1 adapter passes this seed on every trial so the same
+    config produces the same request stream across re-runs."""
     _process: subprocess.Popen[bytes] | None = field(default=None, init=False, repr=False)
 
     def surface(self) -> dict[str, Any]:
@@ -164,6 +182,8 @@ class L1EngineAdapter:
                 timeout_s=self.driver_timeout_s,
                 dataset_name=self.dataset_name,
                 num_prompts=self.num_prompts,
+                goodput_slo_ms=self.goodput_slo_ms,
+                seed=self.bench_seed,
             )
         except (subprocess.TimeoutExpired, RuntimeError) as e:
             return TrialOutput(

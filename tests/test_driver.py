@@ -2,7 +2,11 @@ from __future__ import annotations
 
 from pathlib import Path
 
-from autoinfer.harness.driver import build_bench_command, parse_bench_output
+from autoinfer.harness.driver import (
+    _format_goodput_args,
+    build_bench_command,
+    parse_bench_output,
+)
 
 
 def test_parse_full_output() -> None:
@@ -95,3 +99,90 @@ def test_build_bench_command_with_rate() -> None:
     assert "--request-rate" in cmd
     j = cmd.index("--request-rate")
     assert cmd[j + 1] == "8.0"
+
+
+# ---------------------------------------------------------------------------
+# T-34 — --goodput SLO + per-trial seed plumbing.
+# ---------------------------------------------------------------------------
+
+
+def test_format_goodput_args_full_set() -> None:
+    out = _format_goodput_args({"TTFT": 800.0, "TPOT": 80.0, "E2E": 500.0})
+    assert out == ["--goodput", "TTFT:800", "TPOT:80", "E2E:500"]
+
+
+def test_format_goodput_args_subset_preserves_canonical_order() -> None:
+    out = _format_goodput_args({"E2E": 500.0, "TTFT": 800.0})
+    assert out == ["--goodput", "TTFT:800", "E2E:500"]
+
+
+def test_format_goodput_args_empty_dict_returns_empty() -> None:
+    assert _format_goodput_args({}) == []
+
+
+def test_format_goodput_args_fractional_values_use_g_format() -> None:
+    """Tokens like ``TTFT:799.5`` are valid vLLM syntax; the ``:g``
+    formatter drops trailing zeros and keeps fractional accuracy."""
+    out = _format_goodput_args({"TTFT": 799.5})
+    assert out == ["--goodput", "TTFT:799.5"]
+
+
+def test_build_bench_command_emits_goodput_when_slo_set() -> None:
+    cmd = build_bench_command(
+        endpoint="http://x",
+        trace_path=Path("t"),
+        model="m",
+        result_dir=Path("d"),
+        result_name="r",
+        goodput_slo_ms={"TTFT": 800.0, "TPOT": 80.0, "E2E": 500.0},
+    )
+    assert "--goodput" in cmd
+    i = cmd.index("--goodput")
+    assert cmd[i + 1 : i + 4] == ["TTFT:800", "TPOT:80", "E2E:500"]
+
+
+def test_build_bench_command_no_goodput_when_slo_unset() -> None:
+    cmd = build_bench_command(
+        endpoint="http://x",
+        trace_path=Path("t"),
+        model="m",
+        result_dir=Path("d"),
+        result_name="r",
+    )
+    assert "--goodput" not in cmd
+
+
+def test_build_bench_command_seed_emits_cli() -> None:
+    """T-35: per-trial determinism via --seed."""
+    cmd = build_bench_command(
+        endpoint="http://x",
+        trace_path=Path("t"),
+        model="m",
+        result_dir=Path("d"),
+        result_name="r",
+        seed=42,
+    )
+    assert "--seed" in cmd
+    assert cmd[cmd.index("--seed") + 1] == "42"
+
+
+def test_build_bench_command_no_seed_when_unset() -> None:
+    cmd = build_bench_command(
+        endpoint="http://x",
+        trace_path=Path("t"),
+        model="m",
+        result_dir=Path("d"),
+        result_name="r",
+    )
+    assert "--seed" not in cmd
+
+
+def test_parse_goodput_present_overrides_request_throughput() -> None:
+    """When vLLM returns a non-null ``request_goodput`` (= SLO mode on),
+    it takes precedence over request_throughput in DriverResult."""
+    payload = {
+        "request_goodput": 6.5,
+        "request_throughput": 9.0,
+    }
+    r = parse_bench_output(payload)
+    assert r.goodput_req_per_sec == 6.5

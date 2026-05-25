@@ -31,6 +31,10 @@ def test_compose_measurement_maps_all_fields() -> None:
     assert m.extra["ttft_p50_ms"] == 100.0
     assert m.extra["tpot_p50_ms"] == 20.0
     assert m.extra["goodput"] == 9.0
+    # T-34: goodput_req_per_sec is the descriptive axis used by C04
+    # head-to-head; mirrors the legacy ``goodput`` alias for backwards
+    # compat with existing analysers.
+    assert m.extra["goodput_req_per_sec"] == 9.0
     assert m.extra["max_kl"] == 0.02
 
 
@@ -122,6 +126,48 @@ def test_l1_adapter_exports_and_constructs() -> None:
     assert adapter.layer_name == "l1_engine"
     surface = adapter.surface()
     assert "max_num_batched_tokens" in surface
+
+
+def test_l1_adapter_accepts_goodput_slo_field() -> None:
+    """T-34: goodput_slo_ms field plumbs to run_driver --goodput at runtime."""
+    from autoinfer.layers.l1_engine import L1EngineAdapter, load_catalog
+
+    catalog = load_catalog(
+        Path(__file__).parent.parent / "src/autoinfer/layers/l1_engine/knobs.yaml"
+    )
+    adapter = L1EngineAdapter(
+        model="Qwen/Qwen3-8B",
+        catalog=catalog,
+        trace_path=Path("/tmp/trace.jsonl"),
+        reference_uri="http://localhost:8001",
+        quality_prompts=["hi"],
+        max_kl=0.05,
+        result_dir=Path("/tmp/runs"),
+        goodput_slo_ms={"TTFT": 800.0, "TPOT": 80.0, "E2E": 500.0},
+        bench_seed=17,
+    )
+    assert adapter.goodput_slo_ms == {"TTFT": 800.0, "TPOT": 80.0, "E2E": 500.0}
+    assert adapter.bench_seed == 17
+
+
+def test_l1_adapter_defaults_have_no_slo_or_seed() -> None:
+    """Backward compat: legacy throughput-mode adapters keep slo/seed unset."""
+    from autoinfer.layers.l1_engine import L1EngineAdapter, load_catalog
+
+    catalog = load_catalog(
+        Path(__file__).parent.parent / "src/autoinfer/layers/l1_engine/knobs.yaml"
+    )
+    adapter = L1EngineAdapter(
+        model="Qwen/Qwen3-8B",
+        catalog=catalog,
+        trace_path=Path("/tmp/trace.jsonl"),
+        reference_uri="http://localhost:8001",
+        quality_prompts=["hi"],
+        max_kl=0.05,
+        result_dir=Path("/tmp/runs"),
+    )
+    assert adapter.goodput_slo_ms is None
+    assert adapter.bench_seed is None
 
 
 def test_l1_adapter_rejects_constraint_violation_without_subprocess() -> None:
