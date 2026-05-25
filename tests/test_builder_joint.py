@@ -166,6 +166,46 @@ def test_runner_objective_axis_switches_to_goodput_when_e2e_slo_set(
     }
 
 
+def test_bench_seed_threaded_to_l1_adapter(tmp_path: Path) -> None:
+    """T-35: harness.driver.bench_seed lands on L1EngineAdapter.bench_seed."""
+    raw = _raw_joint(tmp_path)
+    raw["harness"]["driver"]["bench_seed"] = 17
+    cfg = RunConfig.model_validate(raw)
+    runner, _ = build_runner(cfg)
+    l1_adapter = runner.scheduler.specs["l1_engine"].adapter
+    assert l1_adapter.bench_seed == 17  # type: ignore[attr-defined]
+
+
+def test_corpus_info_captured_into_hw_context_and_event(tmp_path: Path) -> None:
+    """T-35: trace_path sha256 is computed at run-start and recorded in
+    both hw_context.json and the config_loaded event, so reproduction
+    can verify the same shard."""
+    import hashlib
+    import json
+
+    cfg = RunConfig.model_validate(_raw_joint(tmp_path))
+    build_runner(cfg)
+
+    hw_ctx_path = tmp_path / "runs" / "hw_context.json"
+    ctx = json.loads(hw_ctx_path.read_text())
+    assert "corpus" in ctx
+    corpus = ctx["corpus"]
+    assert corpus["path"].endswith("trace.jsonl")
+    expected = hashlib.sha256(
+        cfg.harness.driver.trace_path.read_bytes()
+    ).hexdigest()
+    assert corpus["sha256"] == expected
+    assert corpus["size_bytes"] == cfg.harness.driver.trace_path.stat().st_size
+
+    events_file = tmp_path / "runs" / "events.jsonl"
+    lines = [json.loads(ln) for ln in events_file.read_text().splitlines() if ln.strip()]
+    config_loaded = next(ln for ln in lines if ln.get("type") == "config_loaded")
+    assert config_loaded["corpus"]["sha256"] == expected
+    assert config_loaded["dataset_name"] == "random"
+    # bench_seed defaults to None when unset
+    assert config_loaded["bench_seed"] is None
+
+
 def test_l1_spec_event_records_objective_and_slo(tmp_path: Path) -> None:
     """Run-loaded event must surface the SLO configuration so post-hoc
     analysis can tell goodput-mode runs apart from throughput-mode runs."""

@@ -32,7 +32,12 @@ from autoinfer.policy import (
 )
 from autoinfer.policy.feasibility import FeasibilityModel
 from autoinfer.policy.surrogate import ConstrainedOptunaSurrogate, Surrogate
-from autoinfer.telemetry import EventLog, capture_hw_context, write_hw_context
+from autoinfer.telemetry import (
+    EventLog,
+    capture_corpus_info,
+    capture_hw_context,
+    write_hw_context,
+)
 
 
 def build_runner(
@@ -83,6 +88,8 @@ def build_runner(
     run_id = uuid.uuid4().hex[:12]
     events = EventLog(ledger_dir / "events.jsonl", run_id=run_id)
     hw_ctx = capture_hw_context()
+    corpus_info = capture_corpus_info(cfg.harness.driver.trace_path)
+    hw_ctx["corpus"] = corpus_info
     write_hw_context(ledger_dir / "hw_context.json", hw_ctx)
     events.emit(
         "config_loaded",
@@ -95,6 +102,9 @@ def build_runner(
         gpus=[g.get("name") for g in (hw_ctx.get("gpus") or [])],
         vllm_version=hw_ctx.get("vllm_version"),
         autoinfer_version=hw_ctx.get("autoinfer_version"),
+        corpus=corpus_info,
+        bench_seed=cfg.harness.driver.bench_seed,
+        dataset_name=cfg.harness.driver.dataset_name,
         per_layer=layer_events,
     )
 
@@ -140,6 +150,7 @@ def _build_l1_spec(
         dataset_name=cfg.harness.driver.dataset_name,
         num_prompts=cfg.harness.driver.num_prompts,
         goodput_slo_ms=goodput_slo_ms,
+        bench_seed=cfg.harness.driver.bench_seed,
     )
     from autoinfer.layers.l1_engine import (
         derive_kind_weights,

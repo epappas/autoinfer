@@ -1,11 +1,16 @@
 from __future__ import annotations
 
+import hashlib
+from pathlib import Path
+
 from autoinfer.harness.failure import FailureKind, FailureRecord
 from autoinfer.harness.ledger import Entry, Measurement
 from autoinfer.telemetry.summary import (
     _pip_show,
     build_run_summary,
+    capture_corpus_info,
     capture_hw_context,
+    compute_file_sha256,
 )
 
 
@@ -29,6 +34,45 @@ def test_capture_hw_context_includes_versions_and_keys() -> None:
     # key matters more than its value
     assert "torch_version" in ctx
     assert "vllm_version" in ctx
+
+
+def test_compute_file_sha256_matches_reference(tmp_path: Path) -> None:
+    """T-35: streaming sha256 matches hashlib.sha256(file_bytes).hexdigest()."""
+    payload = b"the quick brown fox\n" * 1000
+    p = tmp_path / "trace.jsonl"
+    p.write_bytes(payload)
+    expected = hashlib.sha256(payload).hexdigest()
+    assert compute_file_sha256(p) == expected
+
+
+def test_compute_file_sha256_missing_returns_none(tmp_path: Path) -> None:
+    assert compute_file_sha256(tmp_path / "does-not-exist") is None
+
+
+def test_compute_file_sha256_directory_returns_none(tmp_path: Path) -> None:
+    """A directory isn't a file — the helper refuses to hash it."""
+    sub = tmp_path / "sub"
+    sub.mkdir()
+    assert compute_file_sha256(sub) is None
+
+
+def test_capture_corpus_info_records_sha_and_size(tmp_path: Path) -> None:
+    p = tmp_path / "shard.json"
+    p.write_bytes(b"x" * 1024)
+    info = capture_corpus_info(p)
+    assert info["path"] == str(p)
+    assert info["sha256"] == hashlib.sha256(b"x" * 1024).hexdigest()
+    assert info["size_bytes"] == 1024
+
+
+def test_capture_corpus_info_missing_file_still_records_path(tmp_path: Path) -> None:
+    """Absence is a finding; we still record the path so the run JSON
+    explains why reproduction failed (e.g. shard file was deleted)."""
+    p = tmp_path / "absent.json"
+    info = capture_corpus_info(p)
+    assert info["path"] == str(p)
+    assert info["sha256"] is None
+    assert info["size_bytes"] is None
 
 
 def _measure(tok: float, tpot: float = 50.0, hbm: float = 10.0) -> Measurement:

@@ -45,6 +45,17 @@ class DriverConfig(_Base):
             "SLO. Leave unset for legacy throughput-only optimisation."
         ),
     )
+    bench_seed: int | None = Field(
+        default=None,
+        ge=0,
+        description=(
+            "Deterministic ``vllm bench serve --seed`` value. When set, "
+            "the request generator is reproducible across re-runs at "
+            "the same config. T-35: pairs with corpus pinning to make "
+            "campaign runs reproducible byte-for-byte. Leave unset to "
+            "fall back to vLLM's internal seeding."
+        ),
+    )
     dataset_name: Literal["random", "sharegpt", "custom", "sonnet"] = "random"
     num_prompts: int = Field(ge=1, default=64)
 
