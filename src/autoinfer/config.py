@@ -31,6 +31,20 @@ class DriverConfig(_Base):
     duration_s: int = Field(gt=0)
     slo_ttft_p99_ms: float = Field(gt=0.0)
     slo_tpot_p99_ms: float = Field(gt=0.0)
+    slo_e2e_p99_ms: float | None = Field(
+        default=None,
+        gt=0.0,
+        description=(
+            "Optional E2E (full-request) SLO in milliseconds. When set "
+            "alongside TTFT/TPOT SLOs, the driver passes the three "
+            "thresholds to ``vllm bench serve --goodput`` and the "
+            "optimisation axis switches from raw ``tokens_per_sec`` to "
+            "``goodput`` (requests-meeting-SLO per second). T-34: "
+            "required for honest head-to-heads against ``vllm "
+            "benchmarks/auto_tune`` whose objective is goodput under "
+            "SLO. Leave unset for legacy throughput-only optimisation."
+        ),
+    )
     dataset_name: Literal["random", "sharegpt", "custom", "sonnet"] = "random"
     num_prompts: int = Field(ge=1, default=64)
 

@@ -98,10 +98,15 @@ def build_runner(
         per_layer=layer_events,
     )
 
+    runner_objective = (
+        "goodput_req_per_sec"
+        if _goodput_slo_ms(cfg) is not None
+        else "tokens_per_sec"
+    )
     runner = ContinuousRunner(
         scheduler=LayerScheduler(specs),
         ledger=ledger,
-        objective_axis="tokens_per_sec",
+        objective_axis=runner_objective,
         maximize=True,
         operator=operator,
         events=events,
@@ -118,6 +123,9 @@ def _build_l1_spec(
     prompts = _resolve_gate_prompts(cfg)
     effective_max_kl = _calibrate_max_kl(cfg, l1_cfg.model, prompts, label="l1")
 
+    goodput_slo_ms = _goodput_slo_ms(cfg)
+    objective_axis = "goodput_req_per_sec" if goodput_slo_ms else "tokens_per_sec"
+
     adapter = L1EngineAdapter(
         model=l1_cfg.model,
         catalog=catalog,
@@ -131,6 +139,7 @@ def _build_l1_spec(
         startup_timeout_s=l1_cfg.startup_timeout_s,
         dataset_name=cfg.harness.driver.dataset_name,
         num_prompts=cfg.harness.driver.num_prompts,
+        goodput_slo_ms=goodput_slo_ms,
     )
     from autoinfer.layers.l1_engine import (
         derive_kind_weights,
@@ -141,7 +150,7 @@ def _build_l1_spec(
     surrogate = _build_surrogate(
         cfg,
         surface=adapter.surface(),
-        objective_axis="tokens_per_sec",
+        objective_axis=objective_axis,
         maximize=True,
         knob_classes=derive_knob_classes(catalog),
         knob_weights=derive_knob_weights(catalog),
@@ -167,8 +176,28 @@ def _build_l1_spec(
         "max_kl_configured": cfg.harness.gate.max_kl,
         "max_kl_effective": effective_max_kl,
         "self_kl_calibrated": cfg.harness.gate.calibrate_self_kl,
+        "objective_axis": objective_axis,
+        "goodput_slo_ms": dict(goodput_slo_ms) if goodput_slo_ms else None,
     }
     return "l1_engine", spec, event
+
+
+def _goodput_slo_ms(cfg: RunConfig) -> dict[str, float] | None:
+    """Compose the ``--goodput`` SLO dict from harness.driver.
+
+    T-34. Returns ``None`` when ``slo_e2e_p99_ms`` is unset — that's the
+    explicit opt-out toggle for goodput-mode optimisation; the legacy
+    throughput axis stays in force. When E2E is set, all three SLO
+    components are bundled so vLLM's bench enforces them jointly.
+    """
+    drv = cfg.harness.driver
+    if drv.slo_e2e_p99_ms is None:
+        return None
+    return {
+        "TTFT": float(drv.slo_ttft_p99_ms),
+        "TPOT": float(drv.slo_tpot_p99_ms),
+        "E2E": float(drv.slo_e2e_p99_ms),
+    }
 
 
 def _build_l2_spec(

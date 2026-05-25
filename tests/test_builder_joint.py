@@ -138,6 +138,53 @@ def test_single_layer_l1_still_builds(tmp_path: Path) -> None:
     assert list(runner.scheduler.specs.keys()) == ["l1_engine"]
 
 
+def test_runner_objective_axis_defaults_to_tokens_per_sec(tmp_path: Path) -> None:
+    """T-34: without slo_e2e_p99_ms set, legacy throughput-axis path stays."""
+    cfg = RunConfig.model_validate(_raw_joint(tmp_path))
+    runner, _ = build_runner(cfg)
+    assert runner.objective_axis == "tokens_per_sec"
+    # L1 adapter should not have an SLO either.
+    l1_adapter = runner.scheduler.specs["l1_engine"].adapter
+    assert l1_adapter.goodput_slo_ms is None  # type: ignore[attr-defined]
+
+
+def test_runner_objective_axis_switches_to_goodput_when_e2e_slo_set(
+    tmp_path: Path,
+) -> None:
+    """T-34: setting harness.driver.slo_e2e_p99_ms flips the runner to
+    goodput-axis and wires the L1 adapter with --goodput SLOs."""
+    raw = _raw_joint(tmp_path)
+    raw["harness"]["driver"]["slo_e2e_p99_ms"] = 500.0
+    cfg = RunConfig.model_validate(raw)
+    runner, _ = build_runner(cfg)
+    assert runner.objective_axis == "goodput_req_per_sec"
+    l1_adapter = runner.scheduler.specs["l1_engine"].adapter
+    assert l1_adapter.goodput_slo_ms == {  # type: ignore[attr-defined]
+        "TTFT": 500.0,
+        "TPOT": 50.0,
+        "E2E": 500.0,
+    }
+
+
+def test_l1_spec_event_records_objective_and_slo(tmp_path: Path) -> None:
+    """Run-loaded event must surface the SLO configuration so post-hoc
+    analysis can tell goodput-mode runs apart from throughput-mode runs."""
+    raw = _raw_joint(tmp_path)
+    raw["harness"]["driver"]["slo_e2e_p99_ms"] = 500.0
+    cfg = RunConfig.model_validate(raw)
+    build_runner(cfg)
+    events_file = tmp_path / "runs" / "events.jsonl"
+    import json
+
+    lines = [json.loads(ln) for ln in events_file.read_text().splitlines() if ln.strip()]
+    config_loaded = next(ln for ln in lines if ln.get("type") == "config_loaded")
+    l1_event = next(
+        e for e in config_loaded["per_layer"] if e["layer"] == "l1_engine"
+    )
+    assert l1_event["objective_axis"] == "goodput_req_per_sec"
+    assert l1_event["goodput_slo_ms"] == {"TTFT": 500.0, "TPOT": 50.0, "E2E": 500.0}
+
+
 def test_single_layer_l3_still_builds(tmp_path: Path) -> None:
     raw = _raw_joint(tmp_path)
     raw["layers"].pop("l1_engine")  # type: ignore[attr-defined]

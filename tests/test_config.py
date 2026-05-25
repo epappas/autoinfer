@@ -82,3 +82,26 @@ def test_yaml_non_mapping_rejected(tmp_path: Path) -> None:
     cfg_path.write_text("- a\n- b\n")
     with pytest.raises(ValueError):
         load_config(cfg_path)
+
+
+def test_slo_e2e_p99_ms_defaults_to_none() -> None:
+    """T-34: optional E2E SLO is None by default — preserves legacy
+    throughput-mode runs."""
+    run = RunConfig.model_validate(_minimal_raw())
+    assert run.harness.driver.slo_e2e_p99_ms is None
+
+
+def test_slo_e2e_p99_ms_accepts_positive_value() -> None:
+    """T-34: E2E SLO set on the driver flips the run into goodput mode."""
+    raw = _minimal_raw()
+    raw["harness"]["driver"]["slo_e2e_p99_ms"] = 500.0  # type: ignore[index]
+    run = RunConfig.model_validate(raw)
+    assert run.harness.driver.slo_e2e_p99_ms == 500.0
+
+
+def test_slo_e2e_p99_ms_zero_or_negative_rejected() -> None:
+    """T-34: gt=0 constraint matches the other SLO fields."""
+    raw = _minimal_raw()
+    raw["harness"]["driver"]["slo_e2e_p99_ms"] = 0.0  # type: ignore[index]
+    with pytest.raises(ValidationError):
+        RunConfig.model_validate(raw)
