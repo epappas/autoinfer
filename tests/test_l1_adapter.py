@@ -168,6 +168,31 @@ def test_l1_adapter_defaults_have_no_slo_or_seed() -> None:
     )
     assert adapter.goodput_slo_ms is None
     assert adapter.bench_seed is None
+    # T-36 defaults: deterministic-by-default invariance + MP-V1 enabled.
+    assert adapter.multiprocessing_v1 is True
+    assert adapter.enforce_batch_invariance is True
+
+
+def test_l1_adapter_determinism_fields_settable() -> None:
+    """T-36: multiprocessing_v1 and enforce_batch_invariance reach the adapter."""
+    from autoinfer.layers.l1_engine import L1EngineAdapter, load_catalog
+
+    catalog = load_catalog(
+        Path(__file__).parent.parent / "src/autoinfer/layers/l1_engine/knobs.yaml"
+    )
+    adapter = L1EngineAdapter(
+        model="Qwen/Qwen3-8B",
+        catalog=catalog,
+        trace_path=Path("/tmp/trace.jsonl"),
+        reference_uri="http://localhost:8001",
+        quality_prompts=["hi"],
+        max_kl=0.05,
+        result_dir=Path("/tmp/runs"),
+        multiprocessing_v1=False,
+        enforce_batch_invariance=False,
+    )
+    assert adapter.multiprocessing_v1 is False
+    assert adapter.enforce_batch_invariance is False
 
 
 def test_l1_adapter_rejects_constraint_violation_without_subprocess() -> None:

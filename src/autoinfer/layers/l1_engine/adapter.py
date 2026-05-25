@@ -138,6 +138,16 @@ class L1EngineAdapter:
     """Deterministic ``vllm bench serve`` request-generator seed. T-35
     partial: the L1 adapter passes this seed on every trial so the same
     config produces the same request stream across re-runs."""
+    multiprocessing_v1: bool = True
+    """T-36 determinism lever. When False, the candidate subprocess is
+    started with ``VLLM_ENABLE_V1_MULTIPROCESSING=0`` so V1's
+    multi-process backend (a known source of batch-composition
+    nondeterminism) is disabled. Costs throughput, stabilises KL."""
+    enforce_batch_invariance: bool = True
+    """T-36 determinism lever. When True, a gate run that reports
+    ``batch_invariant=False`` is rejected as QUALITY_INVARIANCE; when
+    False, the gate accepts on KL alone. Default True; set False only
+    for kernels with a known valid invariance violation."""
     _process: subprocess.Popen[bytes] | None = field(default=None, init=False, repr=False)
 
     def surface(self) -> dict[str, Any]:
@@ -204,10 +214,12 @@ class L1EngineAdapter:
                 measurement=None,
                 failure=self._fail(trial, FailureKind.UNKNOWN, f"gate failed: {e}"),
             )
-        if not gate.passes(self.max_kl):
+        kl_fail = gate.mean_kl > self.max_kl
+        invariance_fail = self.enforce_batch_invariance and not gate.batch_invariant
+        if kl_fail or invariance_fail:
             kind = (
                 FailureKind.QUALITY_INVARIANCE
-                if not gate.batch_invariant
+                if invariance_fail
                 else FailureKind.QUALITY_KL
             )
             return TrialOutput(
@@ -215,7 +227,7 @@ class L1EngineAdapter:
                 failure=self._fail(
                     trial,
                     kind,
-                    f"gate rejected mean_kl={gate.mean_kl:.4f} invariant={gate.batch_invariant}",
+                    f"gate rejected mean_kl={gate.mean_kl:.4f} invariant={gate.batch_invariant} enforced={self.enforce_batch_invariance}",
                 ),
             )
         peak_hbm = query_gpu_memory_used_gb(self.gpu_device_id) or 0.0
@@ -232,6 +244,8 @@ class L1EngineAdapter:
         )
         env = os.environ.copy()
         env.update(extra_env)
+        if not self.multiprocessing_v1:
+            env["VLLM_ENABLE_V1_MULTIPROCESSING"] = "0"
         self._process = subprocess.Popen(
             args, env=env, stdout=subprocess.PIPE, stderr=subprocess.PIPE
         )

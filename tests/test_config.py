@@ -126,3 +126,42 @@ def test_bench_seed_negative_rejected() -> None:
     raw["harness"]["driver"]["bench_seed"] = -1  # type: ignore[index]
     with pytest.raises(ValidationError):
         RunConfig.model_validate(raw)
+
+
+def test_determinism_defaults() -> None:
+    """T-36: determinism sub-block defaults to seed=None, batch_invariant=True,
+    multiprocessing_v1=True — backward-compatible behaviour."""
+    run = RunConfig.model_validate(_minimal_raw())
+    det = run.harness.determinism
+    assert det.seed is None
+    assert det.batch_invariant is True
+    assert det.multiprocessing_v1 is True
+
+
+def test_determinism_accepts_explicit_values() -> None:
+    raw = _minimal_raw()
+    raw["harness"]["determinism"] = {  # type: ignore[index]
+        "seed": 7,
+        "batch_invariant": False,
+        "multiprocessing_v1": False,
+    }
+    run = RunConfig.model_validate(raw)
+    det = run.harness.determinism
+    assert det.seed == 7
+    assert det.batch_invariant is False
+    assert det.multiprocessing_v1 is False
+
+
+def test_determinism_seed_negative_rejected() -> None:
+    raw = _minimal_raw()
+    raw["harness"]["determinism"] = {"seed": -1}  # type: ignore[index]
+    with pytest.raises(ValidationError):
+        RunConfig.model_validate(raw)
+
+
+def test_determinism_extra_field_rejected() -> None:
+    """``DeterminismConfig`` inherits ``_Base`` (extra=forbid) — typos fail loudly."""
+    raw = _minimal_raw()
+    raw["harness"]["determinism"] = {"deterministic_kernels": True}  # type: ignore[index]
+    with pytest.raises(ValidationError):
+        RunConfig.model_validate(raw)

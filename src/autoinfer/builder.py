@@ -91,6 +91,7 @@ def build_runner(
     corpus_info = capture_corpus_info(cfg.harness.driver.trace_path)
     hw_ctx["corpus"] = corpus_info
     write_hw_context(ledger_dir / "hw_context.json", hw_ctx)
+    determinism = cfg.harness.determinism
     events.emit(
         "config_loaded",
         name=cfg.name,
@@ -105,6 +106,11 @@ def build_runner(
         corpus=corpus_info,
         bench_seed=cfg.harness.driver.bench_seed,
         dataset_name=cfg.harness.driver.dataset_name,
+        determinism={
+            "seed": determinism.seed,
+            "batch_invariant": determinism.batch_invariant,
+            "multiprocessing_v1": determinism.multiprocessing_v1,
+        },
         per_layer=layer_events,
     )
 
@@ -151,6 +157,8 @@ def _build_l1_spec(
         num_prompts=cfg.harness.driver.num_prompts,
         goodput_slo_ms=goodput_slo_ms,
         bench_seed=cfg.harness.driver.bench_seed,
+        multiprocessing_v1=cfg.harness.determinism.multiprocessing_v1,
+        enforce_batch_invariance=cfg.harness.determinism.batch_invariant,
     )
     from autoinfer.layers.l1_engine import (
         derive_kind_weights,

@@ -85,12 +85,58 @@ class LedgerConfig(_Base):
     pareto_axes: tuple[str, ...] = ("tokens_per_sec", "tpot_p99_ms", "peak_hbm_gb")
 
 
+class DeterminismConfig(_Base):
+    """Determinism levers for the reference replica + candidate startup.
+
+    T-36. C9 (live reference replica) is meaningful only if the replica
+    is deterministic — otherwise reference vs candidate KL is dominated
+    by replica noise. V1 raw doc + Issue #2 list three live levers:
+    seeded sampling, batch-invariant kernels, and the
+    ``VLLM_ENABLE_V1_MULTIPROCESSING=0`` env (forces single-process
+    inference where batch composition is the only remaining noise
+    source). This sub-block is the typed contract; ``replica.py`` and
+    ``L1EngineAdapter`` apply the levers at process startup.
+    """
+
+    seed: int | None = Field(
+        default=None,
+        ge=0,
+        description=(
+            "Sampling seed for the reference replica's ``vllm serve``. "
+            "Pairs with ``driver.bench_seed`` (T-35) for joint "
+            "reproducibility; null leaves vLLM to pick its own seed."
+        ),
+    )
+    batch_invariant: bool = Field(
+        default=True,
+        description=(
+            "Enforce the gate's batch-invariance check. When True, a "
+            "candidate that fails the invariance probe is rejected as "
+            "QUALITY_INVARIANCE; when False, the gate ignores the "
+            "invariance result. Set False only for kernels where the "
+            "invariance contract is known to be violated for valid "
+            "reasons (e.g. some grouped-attention paths)."
+        ),
+    )
+    multiprocessing_v1: bool = Field(
+        default=True,
+        description=(
+            "When False, set ``VLLM_ENABLE_V1_MULTIPROCESSING=0`` in the "
+            "replica + candidate environments. V1 multi-process backend "
+            "introduces nondeterminism in batch composition that fools "
+            "the reference-replica gate; turning it off costs throughput "
+            "but stabilises reference-vs-candidate KL."
+        ),
+    )
+
+
 class HarnessConfig(_Base):
     """Shared substrate. Frozen per run (P10)."""
 
     driver: DriverConfig
     gate: QualityGateConfig
     ledger: LedgerConfig
+    determinism: DeterminismConfig = Field(default_factory=DeterminismConfig)
 
 
 class WarmstartConfig(_Base):

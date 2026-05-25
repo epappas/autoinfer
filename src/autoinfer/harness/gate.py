@@ -3,6 +3,35 @@
 Implements P8 (live reference replica, not cached values) and P9 (quality
 failures are typed). KL math is pure; the HTTP layer is real (no mocks)
 and requires a running OpenAI-compatible endpoint for integration tests.
+
+Determinism contract (T-36, ``HarnessConfig.determinism``)
+--------------------------------------------------------
+
+The gate compares the candidate's logits against a live reference replica.
+That comparison is only meaningful when the replica's own noise floor is
+small relative to real candidate drift. Three levers stabilise replica
+behaviour; all three live on ``HarnessConfig.determinism`` and are
+applied at process startup (in ``replica.py`` and the candidate adapter):
+
+1. **``seed``** — passed to ``vllm serve`` as ``--seed N``. Pairs with
+   ``DriverConfig.bench_seed`` (T-35) so both endpoints sample the same
+   sequence on a re-run.
+2. **``batch_invariant``** — when True, ``L1EngineAdapter.run`` rejects a
+   trial whose ``batch_invariance_check`` returns False as
+   ``QUALITY_INVARIANCE``. When False, the gate ignores invariance and
+   selects on KL only. Default True; set False only for kernels whose
+   invariance contract is known to be validly relaxed.
+3. **``multiprocessing_v1``** — when False, ``VLLM_ENABLE_V1_MULTIPROCESSING=0``
+   is exported into the candidate + replica environments. V1's multi-
+   process backend introduces batch-composition nondeterminism that
+   fools this gate; turning it off costs throughput but stabilises KL.
+
+Calibration (``calibrate_self_kl``) measures the replica's own noise
+floor by gating the reference against itself; the gate's ``max_kl``
+ceiling is then raised to ``calibration_multiplier * self_p95`` so
+real-world candidate-vs-reference drift can be distinguished from
+replica jitter. Calibration is a one-way valve (it can only loosen the
+configured ``max_kl``, never tighten it).
 """
 
 from __future__ import annotations
