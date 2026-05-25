@@ -19,6 +19,7 @@ from typing import Any
 
 from autoinfer.config import RunConfig, WarmstartConfig
 from autoinfer.controller import ContinuousRunner, LayerScheduler, LayerSpec
+from autoinfer.harness.failure import FailureKind
 from autoinfer.harness.ledger import Ledger
 from autoinfer.layers.l1_engine import KnobCatalog, L1EngineAdapter, defaults, load_catalog
 from autoinfer.policy import (
@@ -131,7 +132,11 @@ def _build_l1_spec(
         dataset_name=cfg.harness.driver.dataset_name,
         num_prompts=cfg.harness.driver.num_prompts,
     )
-    from autoinfer.layers.l1_engine import derive_knob_classes, derive_knob_weights
+    from autoinfer.layers.l1_engine import (
+        derive_kind_weights,
+        derive_knob_classes,
+        derive_knob_weights,
+    )
 
     surrogate = _build_surrogate(
         cfg,
@@ -140,6 +145,7 @@ def _build_l1_spec(
         maximize=True,
         knob_classes=derive_knob_classes(catalog),
         knob_weights=derive_knob_weights(catalog),
+        kind_weights=derive_kind_weights(catalog),
     )
     warmstart = _build_warmstart(cfg.policy.warmstart, catalog)
 
@@ -383,6 +389,7 @@ def _build_surrogate(
     maximize: bool,
     knob_classes: dict[str, dict[str, str]] | None = None,
     knob_weights: dict[str, float] | None = None,
+    kind_weights: dict[FailureKind, dict[str, float]] | None = None,
 ) -> Surrogate:
     """Build the perf surrogate, optionally wrapped in feasibility constraint.
 
@@ -400,6 +407,11 @@ def _build_surrogate(
     deterministically predict feasibility (e.g. ``kv_cache_dtype`` on
     A100). Without this, ``_config_distance`` averages across all knobs
     and the per-knob class signal gets diluted by other knobs varying.
+
+    ``kind_weights`` (T-26c) routes per-FailureKind sub-classifiers —
+    each kind's k-NN uses its own driver-knob weights, and
+    ``predict_proba`` aggregates as ``1 - max_K P(fail K)``. Empty/None
+    reproduces the T-26b path.
     """
     s_cfg = cfg.policy.surrogate
     inner = OptunaSurrogate(
@@ -418,6 +430,7 @@ def _build_surrogate(
             min_observations=s_cfg.feasibility_min_observations,
             knob_classes=knob_classes or {},
             knob_weights=knob_weights or {},
+            kind_weights=kind_weights or {},
         ),
         threshold=s_cfg.feasibility_threshold,
         max_resamples=s_cfg.feasibility_max_resamples,
