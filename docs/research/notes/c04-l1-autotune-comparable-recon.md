@@ -1,6 +1,22 @@
 # Campaign 04 reconnaissance — autoinfer-L1 vs vLLM `benchmarks/auto_tune`
 
-**Status:** in progress (live notes; reconciled into a campaign-design proposal at the end).
+> **2026-05-26 — RETRACTION + RE-SCOPE.** Pre-flight engineering is on
+> `main` (PRs #34–#38; T-26c + T-33–T-36). Before kicking off T-37 the
+> agent fetched `benchmarks/auto_tune/auto_tune.sh` from vllm-project
+> mainline and found three load-bearing facts the original recon got
+> wrong. Original text is preserved below; corrected scope is in the
+> new section **"2026-05-26 corrective addendum"**. The original
+> recon's recommended sequence (T-33–T-37 → pre-reg → launch) still
+> stands; **what changes is the C04 workload, knob scope, and vLLM
+> version pin**.
+>
+> Source of correction: `benchmarks/auto_tune/auto_tune.sh` at
+> `vllm-project/vllm` HEAD (fetched via the GitHub API, 2026-05-26).
+> The script's actual contract is documented inline in the corrective
+> addendum.
+
+**Status:** corrected + re-scoped (2026-05-26). Original retrained
+below for traceability; corrective addendum at section bottom.
 
 **Question to answer:** can autoinfer's L1 (engine-config) layer beat
 vLLM's published `benchmarks/auto_tune` line-search on a directly
@@ -354,3 +370,157 @@ in any kernel-level claim.
 ~30 minutes. Within the 30-min reconnaissance budget; mirrors the
 T-21 recon's discipline — recon doc, decision, ticket list, no
 half-built campaign.
+
+---
+
+## 2026-05-26 corrective addendum
+
+### Context
+
+T-26c + T-33 + T-34 + T-35 + T-36 landed on `main` via PRs #34–#38.
+Before launching T-37, the agent fetched
+`benchmarks/auto_tune/auto_tune.sh` from `vllm-project/vllm` HEAD
+(GitHub API, 2026-05-26). The script's actual contract differs from
+the original recon's understanding on three load-bearing facts. This
+addendum documents the corrections; the original recon (above) stays
+verbatim so the audit trail explains how the framing evolved.
+
+### Correction 1 — workload is synthetic random, not ShareGPT
+
+**Original recon claim:** *"Workload: ShareGPT subset (auto_tune's
+default)."*
+
+**Reality (verified against `auto_tune.sh`):** The script invokes
+`vllm bench serve` exclusively with
+`--dataset-name random --random-input-len $INPUT_LEN
+--random-output-len $OUTPUT_LEN --random-prefix-len $prefix_len` —
+no ShareGPT code path exists in the script.
+
+**Implication for C04:** Both sides of the head-to-head must use the
+same workload. Switch C04's autoinfer-L1 driver invocation to
+`dataset_name="random"` with matching `INPUT_LEN`/`OUTPUT_LEN`. T-35's
+ShareGPT-corpus pinning (sha256 of trace_path) remains useful for
+C05+ campaigns that use real workloads — it is not used by C04.
+
+### Correction 2 — knob surface is 2 knobs, not 10+
+
+**Original recon claim:** *"a config search that 'maximises throughput
+s.t. p99 E2E < 500 ms' on a fixed (model, GPU, workload) tuple"* — no
+explicit knob count, but the implied surface was wide enough to be
+called a "config search."
+
+**Reality:** `auto_tune.sh` is a 2-axis grid:
+- `NUM_SEQS_LIST` (default `"128 256"`) × `NUM_BATCHED_TOKENS_LIST`
+  (default `"512 1024 2048 4096"`) = 8 cells.
+- Plus a pre-step that auto-finds the maximum safe
+  `gpu_memory_utilization` (starting at 0.98, decreasing on OOM). This
+  is 1 effective extra knob with auto-selection.
+
+That is the entire search surface. autoinfer-L1's catalog has 12
+knobs (after T-33: `kv_cache_dtype`, `attention_backend`, `dtype`,
+`quantization`, `enable_chunked_prefill`, `enable_prefix_caching`,
+`block_size`, `gpu_memory_utilization`, `max_num_seqs`,
+`max_num_batched_tokens`, `long_prefill_token_threshold`,
+`enforce_eager`).
+
+**Implication for C04 — "Both, in sequence" framing chosen:**
+
+- **C04a (apples-to-apples, 2-knob restricted)** — autoinfer-L1 is
+  restricted to `{max_num_seqs, max_num_batched_tokens}` only, all
+  other knobs fixed at the auto_tune-equivalent values (the GMU
+  auto-found by auto_tune; dtype=auto, kv_cache_dtype=auto,
+  attention_backend left at vLLM's chosen default, chunked_prefill
+  enabled per V1 default). Direct surrogate-vs-grid comparison on
+  the same surface. Win condition: same SLO, ≥10% goodput vs
+  auto_tune's grid winner OR same goodput at fewer trials.
+- **C04b (structural-advantage, full surface)** — autoinfer-L1 with
+  the full 12-knob catalog. Win condition: same SLO, ≥10% goodput vs
+  auto_tune's grid winner — i.e. the wider search must actually find
+  better recipes that the 2-knob grid cannot reach (otherwise the
+  extra search dimensions are noise, not signal, on this workload).
+
+C04a is the conservative direct comparison. C04b is the actual
+thesis test ("joint search beats specialist tool"). Running both
+gives two independent data points; if C04a wins and C04b loses, the
+finding is "surrogate beats grid on the same surface but extra knobs
+don't pay off at this workload" — itself a publishable nuance.
+
+### Correction 3 — vLLM version pinning
+
+**Original recon claim:** silent on vLLM version. Implied
+"the published baseline" = whatever vLLM's mainline has.
+
+**Reality:** autoinfer's `uv.lock` pins **vllm 0.19.1**; Basilica's
+default `vllm/vllm-openai:latest` image floats (currently 0.20.0
+per C03 docs). For the head-to-head to be honest, T-37 and the
+C04 autoinfer run must use the same vLLM commit.
+
+**Decision:** **Upgrade autoinfer's lock to vllm 0.20.0** (the version
+the latest Basilica image carries; matches what's already validated
+in C03's audit container). The lock upgrade is a separate pre-flight
+PR; T-37 runs against vllm 0.20.0 once the lock is on `main`.
+
+### Re-scoped pre-flight ticket map
+
+What still needs to land on `main` before C04 can be pre-registered:
+
+| Ticket | Status | Notes |
+|---|---|---|
+| T-26c | **Closed** (PR #34) | Per-FailureKind sub-classifier |
+| T-33 | **Closed** (PR #35) | L1 catalog V1 gaps |
+| T-34 | **Closed** (PR #36) | Driver `--goodput` + goodput axis |
+| T-35 | **Closed** (PR #37) | Corpus sha256 + bench seed |
+| T-36 | **Closed** (PR #38) | `harness.determinism` sub-block |
+| (new) vLLM lock upgrade | open | bump `uv.lock` to vllm 0.20.0; verify CPU tests |
+| T-37 | open | run `auto_tune.sh` on Llama-3.1-8B / 1×A100 / random / E2E<500ms |
+| C04 pre-reg | open | covers C04a + C04b per "Both in sequence" |
+
+### Re-scoped cost + time
+
+| Step | Effort | Cost |
+|---|---|---|
+| vLLM lock upgrade + CPU tests | ~30 min | $0 |
+| T-37 (auto_tune.sh on 1× A100 spot, ~60 min wall) | ~1.5 h | ~$1–2 |
+| C04 pre-reg writeup | ~1.5 h (covers two campaigns) | $0 |
+| C04a launch (~3 h wall, ~20 trials, 2-knob surrogate) | ~30 min hands-on | ~$8–15 |
+| C04b launch (~4 h wall, ~30 trials, 12-knob surrogate) | ~30 min hands-on | ~$15–30 |
+| Outcome reconciliation + writeup (both) | ~3 h | $0 |
+| **Re-scoped total** | **~9 h hands-on** | **~$24–47** |
+
+### Concrete `auto_tune.sh` env vars for T-37
+
+Based on README example #2 ("max throughput w/ latency requirement"):
+
+```bash
+export BASE="$HOME"
+export MODEL="meta-llama/Llama-3.1-8B-Instruct"
+export SYSTEM="GPU"
+export TP=1
+export INPUT_LEN=1800
+export OUTPUT_LEN=20
+export MAX_MODEL_LEN=2048
+export MIN_CACHE_HIT_PCT=0
+export MAX_LATENCY_ALLOWED_MS=500
+# Defaults — leaves the surface at the published 2-knob grid:
+# NUM_SEQS_LIST="128 256"
+# NUM_BATCHED_TOKENS_LIST="512 1024 2048 4096"
+bash auto_tune.sh
+```
+
+T-37 output (the `result.txt` + the suggested config) gets archived
+verbatim into `docs/research/raw/auto_tune-baseline-<date>.md` with
+the full vLLM commit hash, the GPU model, and the Basilica
+deployment ID. Pre-reg cites that artifact.
+
+### Open decisions reserved for the pre-reg
+
+These do NOT need to be settled in this addendum; they're explicit
+"decide-at-pre-reg" items so the pre-reg can predict them up-front:
+
+- C04 trial budget. auto_tune's grid is 8 cells × ~3-5 bench-runs per
+  cell ≈ ~30 vLLM-bench invocations end-to-end. autoinfer's "same
+  trial budget" target should match the comparable count of bench
+  invocations, not the count of unique configs.
+- Statistical test for the ≥10% goodput claim. With N=1 per config,
+  the wide-search comparison needs either repeated runs of the
+  winning config or a confidence interval on the SLO-meeting rate.
