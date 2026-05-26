@@ -110,8 +110,14 @@ def run_baseline():
         r = subprocess.run(["apt-get", "update", "-qq"], env=env)
         if r.returncode != 0:
             log("apt-get update rc=" + str(r.returncode) + " (proceeding anyway)")
+        # ``bc`` is required by ``auto_tune.sh``'s GMU-find decrement loop
+        # (line 255: ``while (( $(echo "$gpu_memory_utilization >= 0.9" |
+        # bc -l) ))``). The ``vllm/vllm-openai:v0.21.0`` base image
+        # omits bc by default; without it the loop exits immediately
+        # with "Cannot find a proper gpu_memory_utilization over 0.9".
+        # Empirically confirmed by the first T-37 attempt (2026-05-26).
         r = subprocess.run(
-            ["apt-get", "install", "-yqq", "git", "ca-certificates"],
+            ["apt-get", "install", "-yqq", "git", "ca-certificates", "bc"],
             env=env,
         )
         if r.returncode != 0:

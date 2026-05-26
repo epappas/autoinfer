@@ -86,6 +86,22 @@ def test_build_source_includes_vllm_pin_for_git_clone_and_pip() -> None:
     assert '"v" + VLLM_VERSION' in src
 
 
+def test_build_source_installs_bc_for_auto_tune_gmu_loop() -> None:
+    """T-37 attempt 1 (2026-05-26) exited with rc=1 because ``auto_tune.sh``
+    line 255 uses ``bc -l`` for the gpu_memory_utilization-decrement
+    loop and the vllm/vllm-openai image omits bc. The bootstrap must
+    apt-get install bc alongside git + ca-certificates."""
+    src = AutoTuneBaselineSpec().build_source()
+    # apt-get invocation line must list bc.
+    apt_install_lines = [
+        ln for ln in src.splitlines()
+        if "apt-get" in ln and "install" in ln
+    ]
+    assert any("'bc'" in ln or '"bc"' in ln for ln in apt_install_lines), (
+        f"apt install line(s) must include 'bc'; got: {apt_install_lines}"
+    )
+
+
 def test_build_source_under_size_cap() -> None:
     """Basilica validator accepts the sibling CampaignSpec template at
     ~5 KB; keep this one within the same order of magnitude (under 8 KB).
