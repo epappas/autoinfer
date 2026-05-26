@@ -343,6 +343,40 @@ def _maybe_inject_max_model_len(args: list[str]) -> list[str]:
     return [*args, "--max-model-len", str(cap)]
 
 
+def _maybe_inject_gpu_memory_utilization(args: list[str]) -> list[str]:
+    """Inject ``--gpu-memory-utilization <env>`` when
+    ``AUTOINFER_L1_GMU_MAX`` is set AND the catalog hasn't already
+    provided a GMU value.
+
+    Companion to ``_maybe_cap_gpu_memory_utilization`` (which caps a
+    catalog-proposed value). This function handles the "catalog doesn't
+    include GMU at all" case: in 1-GPU shared mode the reference
+    replica is already holding 32 GiB and vLLM's default GMU 0.9 would
+    request 72 GiB on an 80 GiB A100 → OOM with no clamp opportunity.
+
+    C04 attempt 5 (2026-05-26) confirmed: the C04a restricted catalog
+    omits GMU (matches auto_tune.sh's auto-find approach), the env cap
+    function never fires (no value to cap), and every candidate trial
+    OOMs at EngineCore init with ``Free memory on device cuda:0
+    (47.16/79.25 GiB) on startup is less than desired GPU memory
+    utilization (0.92, 72.91 GiB)``.
+
+    If the proposed config already includes a ``gpu_memory_utilization``
+    knob value, that wins (the cap function handles it). This is the
+    catalog-missing fallback.
+    """
+    cap_str = os.environ.get(_GMU_CAP_ENV)
+    if not cap_str:
+        return args
+    try:
+        cap = float(cap_str)
+    except ValueError:
+        return args
+    if "--gpu-memory-utilization" in args:
+        return args
+    return [*args, "--gpu-memory-utilization", str(cap)]
+
+
 def build_vllm_serve_args(
     model: str, port: int, config: dict[str, Any], catalog: KnobCatalog
 ) -> tuple[list[str], dict[str, str]]:
@@ -369,7 +403,10 @@ def build_vllm_serve_args(
         if value is None or value == "none":
             continue
         args.extend([knob.vllm_cli, str(value)])
-    # Inject --max-model-len fallback after catalog knobs so any
-    # catalog-provided value wins.
+    # Inject --max-model-len + --gpu-memory-utilization fallbacks
+    # after catalog knobs so any catalog-provided values win. These
+    # env-var injects make 1-GPU shared mode safe even for restricted
+    # catalogs (e.g. C04a) that don't expose GMU as a knob.
     args = _maybe_inject_max_model_len(args)
+    args = _maybe_inject_gpu_memory_utilization(args)
     return args, env
