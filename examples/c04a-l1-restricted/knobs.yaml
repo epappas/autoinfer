@@ -1,0 +1,76 @@
+# C04a — L1 engine-config catalog restricted to the 2 knobs vLLM's
+# benchmarks/auto_tune.sh searches.
+#
+# This catalog is the surface autoinfer searches in Campaign 04a: an
+# apples-to-apples comparison against auto_tune.sh on its own search
+# space. The 10 other L1 knobs in src/autoinfer/layers/l1_engine/knobs.yaml
+# are intentionally absent here so the surrogate cannot leverage them;
+# they're applied at runtime via the catalog's defaults (no surrogate
+# choice).
+#
+# vLLM auto_tune.sh's grid uses these exact value sets (see
+# benchmarks/auto_tune/auto_tune.sh lines 19-20):
+#   NUM_SEQS_LIST="128 256"
+#   NUM_BATCHED_TOKENS_LIST="512 1024 2048 4096"
+# autoinfer's restricted surface here mirrors them.
+
+knobs:
+  max_num_seqs:
+    type: categorical
+    values: [128, 256]
+    default: 128
+    vllm_cli: --max-num-seqs
+    coupled_with: [max_num_batched_tokens]
+    axis: throughput
+    description: Cap on concurrent sequences per scheduler iteration.
+
+  max_num_batched_tokens:
+    type: categorical
+    values: [512, 1024, 2048, 4096]
+    default: 2048
+    vllm_cli: --max-num-batched-tokens
+    coupled_with: [max_num_seqs]
+    axis: throughput
+    description: Per-iteration token budget across prefill and decode.
+
+  # auto_tune.sh unconditionally passes --enable-prefix-caching in its
+  # start_server function. To match its server contract we pin
+  # prefix_caching=true as a single-value categorical (the surrogate
+  # has no choice; the flag is always emitted to vllm serve). Not a
+  # search axis in this campaign.
+  enable_prefix_caching:
+    type: bool
+    default: true
+    vllm_cli_enable: --enable-prefix-caching
+    vllm_cli_disable: --no-enable-prefix-caching
+    coupled_with: []
+    axis: throughput
+    description: Automatic prefix reuse — fixed ON to match auto_tune.sh.
+
+# No constraints — the 2-knob surface has no compatibility rules.
+# derive_knob_classes returns {} for this catalog; derive_knob_weights
+# returns {} for this catalog. The T-26b/T-26c machinery still runs
+# (defaults thread through builder._build_surrogate) but has no
+# upweighted knobs to focus on. The feasibility classifier still
+# learns from typed failures during the run.
+#
+# Knobs INTENTIONALLY OMITTED (left at vLLM's defaults to match
+# auto_tune.sh's start_server flag set):
+#   - kv_cache_dtype: auto (vLLM default; matches auto_tune)
+#   - dtype: auto (vLLM default)
+#   - quantization: none (vLLM default)
+#   - attention_backend: vLLM picks (auto_tune doesn't set this either)
+#   - block_size: 16 (vLLM default; matches auto_tune)
+#   - gpu_memory_utilization: 0.9 (vLLM default — auto_tune auto-finds
+#     up to 0.98; the autoinfer 1-GPU shared-mode cap from
+#     AUTOINFER_L1_GMU_MAX still applies during the campaign run)
+#   - enable_chunked_prefill: vLLM V1 default is true (matches V1 spec)
+#   - enforce_eager: false (vLLM default)
+#   - long_prefill_token_threshold: vLLM picks
+#
+# Important methodology note (documented in the pre-reg): auto_tune.sh
+# uses --load-format dummy (random weights, no actual model load)
+# while autoinfer uses real weights (required for the C9 live
+# reference replica KL gate). Both measure goodput on the same SLO,
+# but autoinfer additionally enforces output quality. Trials that
+# fail the KL gate are excluded from the best-goodput selection.

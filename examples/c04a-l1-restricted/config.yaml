@@ -1,0 +1,103 @@
+# C04a — autoinfer-L1 on the auto_tune.sh restricted surface.
+#
+# This config restricts autoinfer's L1 search to {max_num_seqs,
+# max_num_batched_tokens} + enable_prefix_caching (pinned ON via the
+# restricted catalog). Workload matches T-37 Baseline B exactly so
+# the goodput comparison is direct:
+#   1x A100 / Llama-3.1-8B-Instruct / synthetic random
+#   INPUT_LEN=256 OUTPUT_LEN=20 / MAX_LATENCY_ALLOWED_MS=500
+# Baseline B's best: goodput = 21.39 req/s (256/512 @ rate=23).
+#
+# autoinfer's win condition: best goodput >= 1.10 * 21.39 = 23.5 req/s.
+# Tie condition: 0.90 * 21.39 .. 1.10 * 21.39 = 19.3 .. 23.5 req/s.
+# Loss: < 19.3 req/s — suggests surrogate-engine bug.
+
+name: c04a-l1-autotune-restricted
+
+harness:
+  driver:
+    # The trace path is needed by DriverConfig but not actually read
+    # by the random-dataset mode. We point at a sentinel file so the
+    # sha-pinning in T-35 has *something* to hash for the run record;
+    # the bench uses --random-input-len / --random-output-len which
+    # autoinfer's driver passes through automatically.
+    trace_path: ./trace/c04-random-sentinel.txt
+    duration_s: 1800
+    # SLO triple — the third field (slo_e2e_p99_ms) is the toggle
+    # that flips the optimisation axis to goodput_req_per_sec per
+    # T-34. All three are passed to vllm bench serve --goodput.
+    slo_ttft_p99_ms: 500.0
+    slo_tpot_p99_ms: 50.0
+    slo_e2e_p99_ms: 500.0
+    dataset_name: random
+    num_prompts: 100
+    bench_seed: 0
+  gate:
+    replica_uri: http://127.0.0.1:8001
+    prompts_path: ./quality/500_prompts.jsonl
+    smoke_prompts: 20
+    full_prompts: 100
+    batch_sizes: [1]
+    max_kl: 2.0
+    calibrate_self_kl: true
+    calibration_multiplier: 5.0
+  ledger:
+    output_dir: ./runs/c04a-l1-autotune-restricted
+    # goodput_req_per_sec is the primary axis since SLO mode is on.
+    # tpot_p99_ms + peak_hbm_gb stay as secondary axes so the joint
+    # frontier still tracks them for the writeup.
+    pareto_axes: [goodput_req_per_sec, tpot_p99_ms, peak_hbm_gb]
+  determinism:
+    seed: 0
+    batch_invariant: true
+    # multiprocessing_v1=false is what the C9-grade KL gate needs
+    # — V1 multiprocessing introduces batch-composition nondeterminism
+    # that fools the gate.
+    multiprocessing_v1: false
+
+policy:
+  warmstart:
+    provider: openai_compatible
+    base_url: https://openrouter.ai/api/v1
+    llm_model: anthropic/claude-sonnet-4
+    api_key_env: OPENROUTER_API_KEY
+    temperature: 0.3
+    max_tokens: 4096
+    timeout_s: 60.0
+    n_configs: 4
+    hardware_notes: |
+      1x A100 80GB SXM4 spot.
+      Workload: synthetic random INPUT=256 OUTPUT=20 (chat-shape).
+      SLO: p99 E2EL < 500ms.
+      Search space is restricted to:
+        max_num_seqs in {128, 256}
+        max_num_batched_tokens in {512, 1024, 2048, 4096}
+        enable_prefix_caching in {true, false}
+      Reference baseline (vLLM auto_tune.sh): 21.39 req/s goodput at
+      max_num_seqs=256, max_num_batched_tokens=512, prefix_caching=true.
+      Target: find an engine-config that meets the 500ms p99 E2EL SLO
+      with strictly higher goodput than 21.39 req/s.
+  surrogate:
+    kind: tpe
+    seed: 0
+    feasibility_threshold: 0.4
+    feasibility_k: 3
+    feasibility_min_observations: 4
+    feasibility_max_resamples: 8
+  operator:
+    cadence: 8
+    llm_model: anthropic/claude-sonnet-4
+
+layers:
+  l1_engine:
+    model: meta-llama/Llama-3.1-8B-Instruct
+    # Restricted catalog (this directory). Surface = 16 unique configs
+    # (8 num_seqs x num_batched_tokens combos x 2 prefix_caching).
+    knobs_path: examples/c04a-l1-restricted/knobs.yaml
+    max_trials: 20
+    candidate_port: 8000
+    startup_timeout_s: 600
+    reserve_cap: 0
+
+target:
+  kind: basilica
