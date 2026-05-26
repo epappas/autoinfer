@@ -81,14 +81,30 @@ def parse_bench_output(payload: dict[str, Any]) -> DriverResult:
 
 _GOODPUT_KEYS: tuple[str, ...] = ("TTFT", "TPOT", "E2E")
 
+# vLLM's ``check_goodput_args`` accepts only lowercase metric names:
+# ttft, tpot, itl, e2el. We accept the human-readable upper-case keys
+# in the dict (TTFT/TPOT/E2E) for backwards-compat with the T-34 API,
+# but translate to vLLM's accepted case at emission time. Confirmed by
+# T-37's auto_tune.sh which uses ``--goodput e2el:$MAX_LATENCY_MS``
+# and by C04a attempt 6 (2026-05-26) where ``--goodput E2E:500`` was
+# rejected with "vllm bench serve failed (exit 1) ... goodput_config_dict
+# = check_goodput_args(args)".
+_GOODPUT_KEY_TO_VLLM: dict[str, str] = {"TTFT": "ttft", "TPOT": "tpot", "E2E": "e2el"}
+
 
 def _format_goodput_args(goodput_slo_ms: dict[str, float]) -> list[str]:
-    """Emit ``--goodput TTFT:X TPOT:Y E2E:Z`` argv tokens. Pure.
+    """Emit ``--goodput ttft:X tpot:Y e2el:Z`` argv tokens. Pure.
 
-    vLLM's ``--goodput`` uses ``nargs='+'`` — multiple ``NAME:VALUE``
-    tokens after the flag. Values are millisecond thresholds. Order is
-    fixed (TTFT, TPOT, E2E) so the rendered command is stable across
-    re-runs; missing keys are dropped.
+    vLLM's ``--goodput`` uses ``nargs='+'`` — multiple ``name:value``
+    tokens after the flag. Values are millisecond thresholds. Metric
+    names MUST be lowercase ``ttft``, ``tpot``, ``e2el`` (vLLM's
+    ``check_goodput_args`` is strict). Order is fixed (TTFT, TPOT,
+    E2E mapped to ttft, tpot, e2el respectively) so the rendered
+    command is stable across re-runs; missing keys are dropped.
+
+    The accepted input dict still uses upper-case keys (TTFT/TPOT/E2E)
+    for human readability and backwards-compat with T-34's API; the
+    lowercase translation happens here at emission.
 
     T-34. C04 head-to-head with vLLM's ``benchmarks/auto_tune`` requires
     a goodput SLO to be enforced during the bench; without it
@@ -98,7 +114,8 @@ def _format_goodput_args(goodput_slo_ms: dict[str, float]) -> list[str]:
     pieces: list[str] = []
     for key in _GOODPUT_KEYS:
         if key in goodput_slo_ms:
-            pieces.append(f"{key}:{goodput_slo_ms[key]:g}")
+            vllm_key = _GOODPUT_KEY_TO_VLLM[key]
+            pieces.append(f"{vllm_key}:{goodput_slo_ms[key]:g}")
     if not pieces:
         return []
     return ["--goodput", *pieces]
