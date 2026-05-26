@@ -35,6 +35,7 @@ GPU_MODELS=""
 GPUS=""
 SPOT=""
 IMAGE=""
+MODEL=""
 
 while [[ $# -gt 0 ]]; do
     case "$1" in
@@ -52,6 +53,8 @@ while [[ $# -gt 0 ]]; do
         --spot=*)      SPOT="${1#*=}"; shift ;;
         --image)       IMAGE="$2"; shift 2 ;;
         --image=*)     IMAGE="${1#*=}"; shift ;;
+        --model)       MODEL="$2"; shift 2 ;;
+        --model=*)     MODEL="${1#*=}"; shift ;;
         --yes|-y)      YES="yes"; shift ;;
         --help|-h)     sed -n '1,30p' "$0"; exit 0 ;;
         *)             echo "unknown arg: $1" >&2; exit 2 ;;
@@ -124,6 +127,7 @@ echo "  gpu-models:    ${GPU_MODELS:-(any matching min-gpu-memory-gb)}"
 echo "  gpus:          ${GPUS:-2 (orchestrator default)}"
 echo "  spot:          ${SPOT:-auto (orchestrator default)}"
 echo "  image:         ${IMAGE:-vllm/vllm-openai:latest (orchestrator default)}"
+echo "  model:         ${MODEL:-Qwen/Qwen3-8B (orchestrator default; MUST match layers.*.model in the config)}"
 CREDS="BASILICA_API_TOKEN"
 [[ -n "${OPENROUTER_API_KEY:-}" ]] && CREDS="$CREDS OPENROUTER_API_KEY"
 [[ -n "${ANTHROPIC_API_KEY:-}" ]] && CREDS="$CREDS ANTHROPIC_API_KEY"
@@ -152,6 +156,8 @@ SPOT_ARGS=()
 [[ -n "$SPOT" ]] && SPOT_ARGS=(--spot "$SPOT")
 IMAGE_ARGS=()
 [[ -n "$IMAGE" ]] && IMAGE_ARGS=(--image "$IMAGE")
+MODEL_ARGS=()
+[[ -n "$MODEL" ]] && MODEL_ARGS=(--model "$MODEL")
 exec uv run python -u scripts/orchestrate_iteration_zero.py \
     --config "$CONFIG" \
     --name "autoinfer-${CONFIG_NAME}-$(date +%s)" \
@@ -161,4 +167,5 @@ exec uv run python -u scripts/orchestrate_iteration_zero.py \
     "${GPU_COUNT_ARGS[@]}" \
     "${SPOT_ARGS[@]}" \
     "${IMAGE_ARGS[@]}" \
+    "${MODEL_ARGS[@]}" \
     "${LAYER_ARGS[@]}"
