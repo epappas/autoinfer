@@ -202,6 +202,60 @@ def test_build_args_max_model_len_invalid_env_falls_back_silently(
     assert "--max-model-len" not in args
 
 
+def test_build_args_gmu_inject_when_catalog_omits_knob(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """C04 attempt-5 root cause: restricted catalog (no GMU knob) +
+    1-GPU mode → candidate launched with vLLM default GMU 0.9 → OOM.
+    With ``AUTOINFER_L1_GMU_MAX`` set, ``_maybe_inject_gpu_memory_utilization``
+    should append ``--gpu-memory-utilization <cap>`` when no catalog
+    knob provided one."""
+    monkeypatch.setenv("AUTOINFER_L1_GMU_MAX", "0.55")
+    catalog = load_catalog(_REPO_CATALOG)
+    # Proposed config has no gpu_memory_utilization entry.
+    args, _ = build_vllm_serve_args("m", 8000, {"max_num_seqs": 128}, catalog)
+    assert "--gpu-memory-utilization" in args
+    idx = args.index("--gpu-memory-utilization")
+    assert float(args[idx + 1]) == pytest.approx(0.55)
+
+
+def test_build_args_gmu_inject_no_op_when_catalog_provides(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """If the catalog proposes GMU, the cap function handles it (we
+    don't double-inject — only one ``--gpu-memory-utilization`` flag
+    in argv)."""
+    monkeypatch.setenv("AUTOINFER_L1_GMU_MAX", "0.55")
+    catalog = load_catalog(_REPO_CATALOG)
+    args, _ = build_vllm_serve_args(
+        "m", 8000, {"gpu_memory_utilization": 0.9}, catalog
+    )
+    # Cap applies — 0.9 → 0.55. Exactly one flag emission.
+    assert args.count("--gpu-memory-utilization") == 1
+    idx = args.index("--gpu-memory-utilization")
+    assert float(args[idx + 1]) == pytest.approx(0.55)
+
+
+def test_build_args_gmu_inject_no_env_no_inject(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Without ``AUTOINFER_L1_GMU_MAX`` set, no inject (legacy path)."""
+    monkeypatch.delenv("AUTOINFER_L1_GMU_MAX", raising=False)
+    catalog = load_catalog(_REPO_CATALOG)
+    args, _ = build_vllm_serve_args("m", 8000, {"max_num_seqs": 128}, catalog)
+    assert "--gpu-memory-utilization" not in args
+
+
+def test_build_args_gmu_inject_invalid_env_silent(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Non-numeric env value → silent fallback, no inject."""
+    monkeypatch.setenv("AUTOINFER_L1_GMU_MAX", "notanumber")
+    catalog = load_catalog(_REPO_CATALOG)
+    args, _ = build_vllm_serve_args("m", 8000, {"max_num_seqs": 128}, catalog)
+    assert "--gpu-memory-utilization" not in args
+
+
 def test_violates_constraints_fp8_requires_good_backend() -> None:
     catalog = load_catalog(_REPO_CATALOG)
     bad = {"kv_cache_dtype": "fp8", "attention_backend": "XFORMERS"}
