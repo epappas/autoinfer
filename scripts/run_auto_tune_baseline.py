@@ -55,17 +55,30 @@ LOG_POLL_S = 10.0
 CAMPAIGN_DONE_MARKER = "campaign finished rc="
 
 
-def _require_token() -> None:
+def _warn_if_no_basilica_token() -> None:
+    """``BasilicaClient()`` auto-loads from ``~/.basilica/.env`` (the
+    config file ``basilica login`` writes) when the env-var is absent,
+    so this is a soft warning rather than a hard exit — the SDK will
+    surface the real auth error itself if neither path works."""
     if not os.environ.get("BASILICA_API_TOKEN"):
-        print("ERROR: BASILICA_API_TOKEN not set", file=sys.stderr)
-        sys.exit(2)
+        print(
+            "[orchestrator] note: BASILICA_API_TOKEN not in env; "
+            "SDK will fall back to ~/.basilica/.env (if present).",
+            file=sys.stderr,
+        )
 
 
 def _require_hf_token() -> None:
+    """Hard exit: the gated Llama-3.1-8B-Instruct download requires HF
+    auth. The orchestrator must read ``HF_TOKEN`` from its own env so
+    it can be passed *through* to the deployment container (which has
+    no HuggingFace config file of its own)."""
     if not os.environ.get("HF_TOKEN"):
         print(
             "ERROR: HF_TOKEN not set — Llama-3.1-8B-Instruct is gated by "
-            "Meta and the deployment will fail at model-download without it.",
+            "Meta and the deployment will fail at model-download without it.\n"
+            "Export the token before re-running, e.g.:\n"
+            "    export HF_TOKEN=hf_xxx",
             file=sys.stderr,
         )
         sys.exit(2)
@@ -323,7 +336,7 @@ def main() -> int:
         )
         return 0
 
-    _require_token()
+    _warn_if_no_basilica_token()
     _require_hf_token()
     import basilica
 
