@@ -86,6 +86,36 @@ def test_build_source_includes_vllm_pin_for_git_clone_and_pip() -> None:
     assert '"v" + VLLM_VERSION' in src
 
 
+def test_build_source_renames_cloned_vllm_pkg_to_avoid_shadow() -> None:
+    """T-37 attempt 2 (2026-05-26) failed with ``ModuleNotFoundError:
+    No module named 'vllm._C'``. Root cause: ``auto_tune.sh`` does
+    ``cd "$BASE/vllm"`` (line 56) → cwd ``/workspace/vllm``. Python
+    prepends cwd to sys.path; ``import vllm`` then finds the cloned
+    source tree at ``/workspace/vllm/vllm/`` (no compiled C extension)
+    instead of the installed wheel at
+    ``/usr/local/lib/python3.12/dist-packages/vllm/``.
+
+    Fix: rename the cloned ``vllm/`` Python package dir to a non-
+    matching name so cwd-based import resolution falls through to
+    site-packages. The rest of the clone (``benchmarks/``, ``.git``)
+    stays intact so the script's own files + ``git rev-parse HEAD``
+    keep working.
+    """
+    src = AutoTuneBaselineSpec().build_source()
+    assert ".vllm_src_shadow_moved" in src
+    # Runtime ordering check: the bootstrap is sequential, so the
+    # state-machine transitions reveal the actual execution order.
+    # ``git_clone`` -> ``shadow_rename`` -> ``auto_tune_running``.
+    clone_stage = src.find('STATE["stage"] = "git_clone"')
+    rename_stage = src.find('STATE["stage"] = "shadow_rename"')
+    auto_tune_stage = src.find('STATE["stage"] = "auto_tune_running"')
+    assert clone_stage < rename_stage < auto_tune_stage, (
+        f"runtime stages should run clone -> rename -> auto_tune; "
+        f"got clone={clone_stage}, rename={rename_stage}, "
+        f"auto_tune={auto_tune_stage}"
+    )
+
+
 def test_build_source_installs_bc_for_auto_tune_gmu_loop() -> None:
     """T-37 attempt 1 (2026-05-26) exited with rc=1 because ``auto_tune.sh``
     line 255 uses ``bc -l`` for the gpu_memory_utilization-decrement
