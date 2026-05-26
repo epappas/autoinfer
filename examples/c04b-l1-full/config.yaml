@@ -1,0 +1,104 @@
+# C04b — autoinfer-L1 with full 12-knob catalog vs auto_tune.sh.
+#
+# Same workload + SLO + hardware as C04a (and T-37 Baseline B), but the
+# search surface is the full L1 catalog at
+# src/autoinfer/layers/l1_engine/knobs.yaml — 12 knobs including T-33's
+# additions (long_prefill_token_threshold, enforce_eager).
+#
+# This is the load-bearing thesis test at L1: does the wider search
+# find recipes the 2-knob grid (Baseline B, 21.39 req/s) cannot reach?
+# Win: best goodput >= 1.10 * 21.39 = 23.5 req/s.
+# Tie: 19.3 .. 23.5 (publishable nuance — wider surface no benefit).
+# Loss: < 19.3 (wider search worse — surrogate gets lost).
+
+name: c04b-l1-autotune-full
+
+harness:
+  driver:
+    trace_path: ./trace/c04-random-sentinel.txt
+    duration_s: 1800
+    slo_ttft_p99_ms: 500.0
+    slo_tpot_p99_ms: 50.0
+    slo_e2e_p99_ms: 500.0
+    dataset_name: random
+    num_prompts: 100
+    bench_seed: 0
+  gate:
+    replica_uri: http://127.0.0.1:8001
+    prompts_path: ./quality/500_prompts.jsonl
+    smoke_prompts: 20
+    full_prompts: 100
+    batch_sizes: [1]
+    max_kl: 2.0
+    calibrate_self_kl: true
+    calibration_multiplier: 5.0
+  ledger:
+    output_dir: ./runs/c04b-l1-autotune-full
+    pareto_axes: [goodput_req_per_sec, tpot_p99_ms, peak_hbm_gb]
+  determinism:
+    seed: 0
+    batch_invariant: true
+    multiprocessing_v1: false
+
+policy:
+  warmstart:
+    provider: openai_compatible
+    base_url: https://openrouter.ai/api/v1
+    llm_model: anthropic/claude-sonnet-4
+    api_key_env: OPENROUTER_API_KEY
+    temperature: 0.3
+    max_tokens: 4096
+    timeout_s: 60.0
+    n_configs: 8
+    hardware_notes: |
+      1x A100 80GB SXM4 spot.
+      Workload: synthetic random INPUT=256 OUTPUT=20 (chat-shape).
+      SLO: p99 E2EL < 500ms.
+      Search space is the full 12-knob L1 catalog:
+        max_num_seqs in {32, 64, 128, 256, 512}
+        max_num_batched_tokens in {1024, 2048, 4096, 6144, 8192, 16384, 32768}
+        enable_chunked_prefill in {true, false}
+        block_size in {16, 32}
+        kv_cache_dtype in {auto, fp8, fp8_e4m3, fp8_e5m2}
+        gpu_memory_utilization in [0.80, 0.95]
+        enable_prefix_caching in {true, false}
+        attention_backend in {FLASHINFER, FLASH_ATTN, TRITON_ATTN, XFORMERS}
+        dtype in {auto, float16, bfloat16}
+        quantization in {none, awq, gptq, fp8}
+        long_prefill_token_threshold in {1024, 2048, 4096, 8192}
+        enforce_eager in {true, false}
+      Hardware notes for the LLM warmstart prior:
+        - A100 sm_80 supports bf16 well; fp8 KV cache is NOT supported
+          on A100 (catalog rule kv_fp8_requires_compatible_backend will
+          mark fp8 + non-FLASHINFER/FLASH_ATTN as STARTUP failures).
+        - chunked_prefill=false forces max_num_batched_tokens >= 32768
+          for any model with max_model_len > batched_tokens.
+        - For short-context workload (INPUT=256, OUTPUT=20,
+          MAX_MODEL_LEN=512), chunked_prefill is usually unnecessary.
+      Reference baseline (vLLM auto_tune.sh on the same workload):
+      21.39 req/s goodput at max_num_seqs=256, max_num_batched_tokens=512,
+      prefix_caching=true. Target: find an engine-config with strictly
+      higher goodput.
+  surrogate:
+    kind: tpe
+    seed: 0
+    feasibility_threshold: 0.4
+    feasibility_k: 3
+    feasibility_min_observations: 4
+    feasibility_max_resamples: 8
+  operator:
+    cadence: 8
+    llm_model: anthropic/claude-sonnet-4
+
+layers:
+  l1_engine:
+    model: meta-llama/Llama-3.1-8B-Instruct
+    # Full 12-knob catalog (the shipped one).
+    knobs_path: src/autoinfer/layers/l1_engine/knobs.yaml
+    max_trials: 40
+    candidate_port: 8000
+    startup_timeout_s: 600
+    reserve_cap: 0
+
+target:
+  kind: basilica
