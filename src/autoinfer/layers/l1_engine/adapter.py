@@ -149,6 +149,7 @@ class L1EngineAdapter:
     False, the gate accepts on KL alone. Default True; set False only
     for kernels with a known valid invariance violation."""
     _process: subprocess.Popen[bytes] | None = field(default=None, init=False, repr=False)
+    _current_trial_id: str | None = field(default=None, init=False, repr=False)
 
     def surface(self) -> dict[str, Any]:
         return to_surrogate_surface(self.catalog)
@@ -165,7 +166,7 @@ class L1EngineAdapter:
                 ),
             )
         try:
-            self._start_candidate(trial.config)
+            self._start_candidate(trial.config, trial_id=trial.trial_id)
         except Exception as e:
             self._stop_candidate()
             return TrialOutput(
@@ -236,7 +237,9 @@ class L1EngineAdapter:
             failure=None,
         )
 
-    def _start_candidate(self, config: dict[str, Any]) -> None:
+    def _start_candidate(
+        self, config: dict[str, Any], *, trial_id: str | None = None
+    ) -> None:
         if self._process is not None:
             raise RuntimeError("candidate already running")
         args, extra_env = build_vllm_serve_args(
@@ -246,6 +249,12 @@ class L1EngineAdapter:
         env.update(extra_env)
         if not self.multiprocessing_v1:
             env["VLLM_ENABLE_V1_MULTIPROCESSING"] = "0"
+        # Remember the trial_id so _wait_ready can write the candidate's
+        # full stderr to a per-trial log file when startup fails. The
+        # FailureRecord.message still gets the truncated tail (500-char
+        # slice) for backward compatibility; the file has the full
+        # context needed to diagnose.
+        self._current_trial_id = trial_id
         self._process = subprocess.Popen(
             args, env=env, stdout=subprocess.PIPE, stderr=subprocess.PIPE
         )
@@ -258,11 +267,34 @@ class L1EngineAdapter:
             if self._process.poll() is not None:
                 code = self._process.returncode
                 stderr = self._drain_stderr()
+                self._archive_candidate_stderr(stderr)
                 raise RuntimeError(f"candidate exited during startup (code {code}): {stderr[-400:]}")
             if _tcp_open("127.0.0.1", self.candidate_port, timeout_s=1.0):
                 return
             time.sleep(2.0)
+        # On readiness timeout, also capture whatever stderr exists so
+        # the failure has diagnostic context.
+        stderr = self._drain_stderr()
+        self._archive_candidate_stderr(stderr)
         raise TimeoutError(f"candidate not ready on port {self.candidate_port}")
+
+    def _archive_candidate_stderr(self, stderr: str) -> None:
+        """Write the candidate's full stderr to ``result_dir/<trial_id>_candidate.stderr.log``.
+
+        The FailureRecord.message captures a 500-char tail (kept for
+        backward compatibility); the file has the full crash context.
+        Empty stderr → no file written.
+        """
+        if not stderr or self._current_trial_id is None:
+            return
+        try:
+            self.result_dir.mkdir(parents=True, exist_ok=True)
+            target = self.result_dir / f"{self._current_trial_id}_candidate.stderr.log"
+            target.write_text(stderr)
+        except OSError:
+            # Diagnostic-only; failure-record path is the authoritative
+            # error surface.
+            return
 
     def _drain_stderr(self) -> str:
         if self._process is None or self._process.stderr is None:
