@@ -157,22 +157,11 @@ def run_baseline():
                 log(STATE["error"])
                 return
 
-        # Move the cloned vllm/ Python package dir out of the way so it
-        # does not shadow the installed package at runtime. auto_tune.sh
-        # does ``cd "$BASE/vllm"`` (line 56) so cwd becomes
-        # ``/workspace/vllm`` for the ``vllm bench serve`` invocations
-        # below. Python prepends cwd to sys.path; without this rename,
-        # ``import vllm`` finds the source tree (no compiled ``vllm._C``
-        # extension) instead of the installed wheel at
-        # ``/usr/local/lib/python3.12/dist-packages/vllm/`` and the
-        # server crashes with ``ModuleNotFoundError: No module named
-        # 'vllm._C'``. Empirically confirmed by T-37 attempt 2
-        # (2026-05-26).
-        #
-        # We keep the rest of the clone (benchmarks/auto_tune/, .git)
-        # because (a) the script reads from ``benchmarks/auto_tune/``
-        # for its own files and (b) ``git rev-parse HEAD`` is needed
-        # to capture the vllm commit hash into result.txt.
+        # auto_tune.sh cds to $BASE/vllm. Python prepends cwd to
+        # sys.path so the cloned vllm/ dir would shadow the installed
+        # wheel and ``import vllm._C`` (compiled extension) fails.
+        # Rename it; benchmarks/auto_tune/ + .git stay intact.
+        # T-37 attempt 2 confirmed (2026-05-26).
         shadow_pkg = VLLM_DIR / "vllm"
         if shadow_pkg.exists():
             STATE["stage"] = "shadow_rename"
@@ -185,6 +174,36 @@ def run_baseline():
                 STATE["error"] = "shadow rename rc=" + str(r.returncode)
                 log(STATE["error"])
                 return
+
+        # auto_tune.sh line 21 ``HOSTNAME=$(hostname)`` picks the pod
+        # name on Basilica; ``vllm bench serve --host POD_NAME`` then
+        # fails to connect from inside the same pod. Force localhost
+        # via sed; verify the substitution fired (sed returns 0 even
+        # on no-match, so check the file). T-37 attempt 3 confirmed.
+        STATE["stage"] = "patch_hostname"
+        auto_tune_sh = VLLM_DIR / "benchmarks" / "auto_tune" / "auto_tune.sh"
+        log("patching HOSTNAME=$(hostname) -> HOSTNAME=localhost")
+        r = subprocess.run(
+            [
+                "sed", "-i",
+                r"s|^HOSTNAME=$(hostname)$|HOSTNAME=localhost|",
+                str(auto_tune_sh),
+            ],
+        )
+        if r.returncode != 0:
+            STATE["stage"] = "patch_hostname_failed"
+            STATE["error"] = "sed patch rc=" + str(r.returncode)
+            log(STATE["error"])
+            return
+        verify = subprocess.run(
+            ["grep", "-cF", "HOSTNAME=localhost", str(auto_tune_sh)],
+            capture_output=True, text=True,
+        )
+        if verify.returncode != 0 or verify.stdout.strip() == "0":
+            STATE["stage"] = "patch_hostname_verify_failed"
+            STATE["error"] = "HOSTNAME=localhost missing after sed"
+            log(STATE["error"])
+            return
 
         RESULTS_DIR.mkdir(parents=True, exist_ok=True)
         auto_tune_env = dict(os.environ)
