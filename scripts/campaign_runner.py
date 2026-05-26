@@ -123,12 +123,22 @@ def start_reference(
     log_path = workdir / "runs" / "reference.log"
     log_path.parent.mkdir(parents=True, exist_ok=True)
     out = log_path.open("wb")
+    # Cap the reference's max_model_len so it doesn't pre-allocate KV
+    # cache for the model's full advertised context (Llama-3.1-8B's
+    # 131072 needs ~16 GiB just for KV cache, exceeding the 15.03 GiB
+    # available at the 1-GPU shared-mode 0.40 GMU). The reference only
+    # serves the gate's quality prompts (a few hundred tokens each)
+    # and the candidate's bench prompts (random or sharegpt, bounded
+    # by the candidate's max_model_len); 4096 is more than enough for
+    # both. C04 attempt 3 (2026-05-26) burned a full deployment cycle
+    # on this; do not regress.
     proc = subprocess.Popen(
         [
             "uv", "run", "vllm", "serve", model,
             "--port", str(port),
             "--dtype", "auto",
             "--gpu-memory-utilization", gpu_mem_util,
+            "--max-model-len", "4096",
         ],
         env=env, cwd=str(workdir), stdout=out, stderr=subprocess.STDOUT,
     )
