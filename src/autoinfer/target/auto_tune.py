@@ -157,6 +157,35 @@ def run_baseline():
                 log(STATE["error"])
                 return
 
+        # Move the cloned vllm/ Python package dir out of the way so it
+        # does not shadow the installed package at runtime. auto_tune.sh
+        # does ``cd "$BASE/vllm"`` (line 56) so cwd becomes
+        # ``/workspace/vllm`` for the ``vllm bench serve`` invocations
+        # below. Python prepends cwd to sys.path; without this rename,
+        # ``import vllm`` finds the source tree (no compiled ``vllm._C``
+        # extension) instead of the installed wheel at
+        # ``/usr/local/lib/python3.12/dist-packages/vllm/`` and the
+        # server crashes with ``ModuleNotFoundError: No module named
+        # 'vllm._C'``. Empirically confirmed by T-37 attempt 2
+        # (2026-05-26).
+        #
+        # We keep the rest of the clone (benchmarks/auto_tune/, .git)
+        # because (a) the script reads from ``benchmarks/auto_tune/``
+        # for its own files and (b) ``git rev-parse HEAD`` is needed
+        # to capture the vllm commit hash into result.txt.
+        shadow_pkg = VLLM_DIR / "vllm"
+        if shadow_pkg.exists():
+            STATE["stage"] = "shadow_rename"
+            log("renaming " + str(shadow_pkg) + " to avoid import shadow")
+            r = subprocess.run(
+                ["mv", str(shadow_pkg), str(VLLM_DIR / ".vllm_src_shadow_moved")],
+            )
+            if r.returncode != 0:
+                STATE["stage"] = "shadow_rename_failed"
+                STATE["error"] = "shadow rename rc=" + str(r.returncode)
+                log(STATE["error"])
+                return
+
         RESULTS_DIR.mkdir(parents=True, exist_ok=True)
         auto_tune_env = dict(os.environ)
         auto_tune_env.update({
