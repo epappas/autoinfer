@@ -168,6 +168,40 @@ def test_build_args_gmu_cap_invalid_env_falls_back_to_proposal(
     assert float(args[idx + 1]) == pytest.approx(0.92)
 
 
+def test_build_args_max_model_len_env_injects_when_unset(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """``AUTOINFER_L1_MAX_MODEL_LEN`` is the 1-GPU shared-mode KV cap.
+    Required for Llama-3.1-8B on a shared GPU (advertised 131k context
+    would otherwise pre-allocate ~16 GiB KV cache; doesn't fit alongside
+    the reference replica)."""
+    monkeypatch.setenv("AUTOINFER_L1_MAX_MODEL_LEN", "4096")
+    catalog = load_catalog(_REPO_CATALOG)
+    args, _ = build_vllm_serve_args("m", 8000, {"max_num_seqs": 128}, catalog)
+    assert "--max-model-len" in args
+    assert args[args.index("--max-model-len") + 1] == "4096"
+
+
+def test_build_args_max_model_len_env_no_op_when_unset(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """No env-var → no injection (legacy single-GPU autoinfer mode)."""
+    monkeypatch.delenv("AUTOINFER_L1_MAX_MODEL_LEN", raising=False)
+    catalog = load_catalog(_REPO_CATALOG)
+    args, _ = build_vllm_serve_args("m", 8000, {"max_num_seqs": 128}, catalog)
+    assert "--max-model-len" not in args
+
+
+def test_build_args_max_model_len_invalid_env_falls_back_silently(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Non-int env value → no injection (don't propagate garbage to vLLM)."""
+    monkeypatch.setenv("AUTOINFER_L1_MAX_MODEL_LEN", "notanumber")
+    catalog = load_catalog(_REPO_CATALOG)
+    args, _ = build_vllm_serve_args("m", 8000, {"max_num_seqs": 128}, catalog)
+    assert "--max-model-len" not in args
+
+
 def test_violates_constraints_fp8_requires_good_backend() -> None:
     catalog = load_catalog(_REPO_CATALOG)
     bad = {"kv_cache_dtype": "fp8", "attention_backend": "XFORMERS"}

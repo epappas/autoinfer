@@ -176,7 +176,17 @@ def run_autoinfer(
         # and L3 (read by L3VllmKernelAdapter._build_vllm_argv).
         env["AUTOINFER_L1_GMU_MAX"] = "0.55"
         env["AUTOINFER_L3_GMU_MAX"] = "0.55"
-        log("AUTOINFER_{L1,L3}_GMU_MAX=0.55 (1-GPU mode; candidate gmu clamped)")
+        # Cap candidate's max_model_len for the same reason the reference
+        # is capped (start_reference uses --max-model-len 4096): Llama-
+        # 3.1-8B's advertised 131k context blows the candidate's KV cache
+        # budget at 0.55 GMU when the reference is concurrently resident.
+        # If the catalog already provides max_model_len, that wins —
+        # _maybe_inject_max_model_len is a fallback, not an override.
+        env["AUTOINFER_L1_MAX_MODEL_LEN"] = "4096"
+        log(
+            "AUTOINFER_{L1,L3}_GMU_MAX=0.55 + AUTOINFER_L1_MAX_MODEL_LEN=4096 "
+            "(1-GPU mode; candidate gmu + max_model_len clamped)"
+        )
     cmd = ["uv", "run", "autoinfer", "run", config]
     if max_trials is not None:
         cmd.extend(["--max-trials", str(max_trials)])

@@ -283,6 +283,7 @@ def violates_constraints(config: dict[str, Any], catalog: KnobCatalog) -> list[s
 
 
 _GMU_CAP_ENV = "AUTOINFER_L1_GMU_MAX"
+_MAX_MODEL_LEN_CAP_ENV = "AUTOINFER_L1_MAX_MODEL_LEN"
 
 
 def _maybe_cap_gpu_memory_utilization(name: str, value: Any) -> Any:
@@ -312,6 +313,36 @@ def _maybe_cap_gpu_memory_utilization(name: str, value: Any) -> Any:
     return min(float(value), cap)
 
 
+def _maybe_inject_max_model_len(args: list[str]) -> list[str]:
+    """Inject ``--max-model-len <env>`` when ``AUTOINFER_L1_MAX_MODEL_LEN``
+    is set AND the catalog hasn't already provided one.
+
+    Llama-3.1-8B-Instruct's advertised ``max_seq_len`` is 131072 tokens.
+    On a shared 1-GPU deployment (reference + candidate co-located), the
+    candidate vLLM pre-allocates KV cache for the full advertised context
+    at startup; at ``gpu_memory_utilization=0.55`` (the 1-GPU clamp the
+    campaign_runner sets) the candidate OOMs at EngineCore init.
+
+    Capping ``--max-model-len`` to a workload-appropriate value (e.g.
+    4096 for chat-shape benches) makes the candidate's KV-cache budget
+    fit. C04 attempt 4 (2026-05-26) failed with 20/20 candidate startup
+    failures from this exact cause.
+
+    If the proposed config already includes a ``max_model_len`` knob
+    value, that wins — this is a fallback / floor, not an override.
+    """
+    cap_str = os.environ.get(_MAX_MODEL_LEN_CAP_ENV)
+    if not cap_str:
+        return args
+    try:
+        cap = int(cap_str)
+    except ValueError:
+        return args
+    if "--max-model-len" in args:
+        return args
+    return [*args, "--max-model-len", str(cap)]
+
+
 def build_vllm_serve_args(
     model: str, port: int, config: dict[str, Any], catalog: KnobCatalog
 ) -> tuple[list[str], dict[str, str]]:
@@ -338,4 +369,7 @@ def build_vllm_serve_args(
         if value is None or value == "none":
             continue
         args.extend([knob.vllm_cli, str(value)])
+    # Inject --max-model-len fallback after catalog knobs so any
+    # catalog-provided value wins.
+    args = _maybe_inject_max_model_len(args)
     return args, env
