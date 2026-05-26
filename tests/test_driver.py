@@ -107,13 +107,18 @@ def test_build_bench_command_with_rate() -> None:
 
 
 def test_format_goodput_args_full_set() -> None:
+    """vLLM's check_goodput_args accepts lowercase metric names only
+    (ttft, tpot, e2el). Dict input still uses upper-case keys for API
+    backwards-compat; lowercase translation happens at emission. C04a
+    attempt 6 (2026-05-26) confirmed: ``--goodput E2E:500`` rejected
+    by ``vllm bench serve``."""
     out = _format_goodput_args({"TTFT": 800.0, "TPOT": 80.0, "E2E": 500.0})
-    assert out == ["--goodput", "TTFT:800", "TPOT:80", "E2E:500"]
+    assert out == ["--goodput", "ttft:800", "tpot:80", "e2el:500"]
 
 
 def test_format_goodput_args_subset_preserves_canonical_order() -> None:
     out = _format_goodput_args({"E2E": 500.0, "TTFT": 800.0})
-    assert out == ["--goodput", "TTFT:800", "E2E:500"]
+    assert out == ["--goodput", "ttft:800", "e2el:500"]
 
 
 def test_format_goodput_args_empty_dict_returns_empty() -> None:
@@ -121,10 +126,10 @@ def test_format_goodput_args_empty_dict_returns_empty() -> None:
 
 
 def test_format_goodput_args_fractional_values_use_g_format() -> None:
-    """Tokens like ``TTFT:799.5`` are valid vLLM syntax; the ``:g``
+    """Tokens like ``ttft:799.5`` are valid vLLM syntax; the ``:g``
     formatter drops trailing zeros and keeps fractional accuracy."""
     out = _format_goodput_args({"TTFT": 799.5})
-    assert out == ["--goodput", "TTFT:799.5"]
+    assert out == ["--goodput", "ttft:799.5"]
 
 
 def test_build_bench_command_emits_goodput_when_slo_set() -> None:
@@ -138,7 +143,7 @@ def test_build_bench_command_emits_goodput_when_slo_set() -> None:
     )
     assert "--goodput" in cmd
     i = cmd.index("--goodput")
-    assert cmd[i + 1 : i + 4] == ["TTFT:800", "TPOT:80", "E2E:500"]
+    assert cmd[i + 1 : i + 4] == ["ttft:800", "tpot:80", "e2el:500"]
 
 
 def test_build_bench_command_no_goodput_when_slo_unset() -> None:
