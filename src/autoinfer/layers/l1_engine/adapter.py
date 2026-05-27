@@ -20,7 +20,11 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
 
-from autoinfer.harness.driver import DriverResult, run_driver
+from autoinfer.harness.driver import (
+    DriverResult,
+    run_driver,
+    run_driver_with_rate_search,
+)
 from autoinfer.harness.failure import FailureKind, FailureRecord
 from autoinfer.harness.gate import GateResult, run_gate
 from autoinfer.harness.ledger import Measurement
@@ -93,13 +97,23 @@ def compose_measurement(
     analysers working.
     """
     goodput = driver.goodput_req_per_sec
-    extra = {
+    extra: dict[str, float] = {
         "ttft_p50_ms": driver.ttft_ms.get("p50", 0.0),
         "tpot_p50_ms": driver.tpot_ms.get("p50", 0.0),
+        "e2el_p50_ms": driver.e2el_ms.get("p50", 0.0),
+        "e2el_p99_ms": driver.e2el_ms.get("p99", 0.0),
         "goodput": goodput,
         "goodput_req_per_sec": goodput,
         "max_kl": gate.max_kl,
     }
+    # T-38: surface the rate the rate-down search settled on. When the
+    # single-shot driver path runs (legacy non-SLO mode),
+    # chosen_request_rate is None and the field is omitted.
+    if driver.chosen_request_rate is not None:
+        # Measurement.extra is dict[str, float] so float('inf') survives
+        # round-trip through JSON as "Infinity"; the post-hoc analyzer
+        # treats it as "saturated load also met SLO".
+        extra["chosen_request_rate"] = driver.chosen_request_rate
     extra.update(_kl_percentiles(gate.per_prompt_kl))
     return Measurement(
         tokens_per_sec=driver.tokens_per_sec,
@@ -183,19 +197,45 @@ class L1EngineAdapter:
 
     def _run_benchmarks(self, trial: TrialInput) -> TrialOutput:
         endpoint = f"http://127.0.0.1:{self.candidate_port}"
+        # T-38: when a goodput SLO is set with an E2E threshold, do a
+        # rate-down search (matching auto_tune.sh's algorithm) instead
+        # of a single-shot bench at request_rate=inf. Without the search,
+        # every cell measures goodput=0 at saturation regardless of
+        # how good the config is.
+        use_rate_search = (
+            self.goodput_slo_ms is not None
+            and "E2E" in self.goodput_slo_ms
+            and self.goodput_slo_ms["E2E"] > 0
+        )
         try:
-            driver = run_driver(
-                endpoint=endpoint,
-                trace_path=self.trace_path,
-                model=self.model,
-                result_dir=self.result_dir,
-                result_name=f"{trial.trial_id}_bench.json",
-                timeout_s=self.driver_timeout_s,
-                dataset_name=self.dataset_name,
-                num_prompts=self.num_prompts,
-                goodput_slo_ms=self.goodput_slo_ms,
-                seed=self.bench_seed,
-            )
+            if use_rate_search:
+                assert self.goodput_slo_ms is not None  # narrowing for mypy
+                driver = run_driver_with_rate_search(
+                    endpoint=endpoint,
+                    trace_path=self.trace_path,
+                    model=self.model,
+                    result_dir=self.result_dir,
+                    result_name_prefix=f"{trial.trial_id}_bench",
+                    max_e2e_slo_ms=self.goodput_slo_ms["E2E"],
+                    num_prompts=self.num_prompts,
+                    timeout_per_bench_s=self.driver_timeout_s,
+                    dataset_name=self.dataset_name,
+                    goodput_slo_ms=self.goodput_slo_ms,
+                    seed=self.bench_seed,
+                )
+            else:
+                driver = run_driver(
+                    endpoint=endpoint,
+                    trace_path=self.trace_path,
+                    model=self.model,
+                    result_dir=self.result_dir,
+                    result_name=f"{trial.trial_id}_bench.json",
+                    timeout_s=self.driver_timeout_s,
+                    dataset_name=self.dataset_name,
+                    num_prompts=self.num_prompts,
+                    goodput_slo_ms=self.goodput_slo_ms,
+                    seed=self.bench_seed,
+                )
         except (subprocess.TimeoutExpired, RuntimeError) as e:
             return TrialOutput(
                 measurement=None,

@@ -20,7 +20,15 @@ class DriverResult:
     request_throughput: float
     ttft_ms: dict[str, float]
     tpot_ms: dict[str, float]
+    e2el_ms: dict[str, float]
     goodput_req_per_sec: float
+    chosen_request_rate: float | None = None
+    """T-38. When the L1 adapter invokes ``run_driver_with_rate_search``,
+    this is the request_rate (req/s) the rate-down search settled on —
+    the highest sustainable rate meeting the SLO. ``None`` for single-
+    shot ``run_driver`` invocations (legacy single-rate behaviour).
+    ``float('inf')`` when the initial ``--request-rate inf`` measurement
+    already met the SLO."""
     raw: dict[str, Any] = field(default_factory=dict)
 
 
@@ -34,6 +42,12 @@ _TPOT_KEYS = {
     "p50": ("median_tpot_ms", "mean_tpot_ms"),
     "p95": ("p95_tpot_ms",),
     "p99": ("p99_tpot_ms",),
+}
+
+_E2EL_KEYS = {
+    "p50": ("median_e2el_ms", "mean_e2el_ms"),
+    "p95": ("p95_e2el_ms",),
+    "p99": ("p99_e2el_ms",),
 }
 
 
@@ -74,6 +88,7 @@ def parse_bench_output(payload: dict[str, Any]) -> DriverResult:
         request_throughput=_num(payload.get("request_throughput")),
         ttft_ms={p: _first_present(payload, keys) for p, keys in _TTFT_KEYS.items()},
         tpot_ms={p: _first_present(payload, keys) for p, keys in _TPOT_KEYS.items()},
+        e2el_ms={p: _first_present(payload, keys) for p, keys in _E2EL_KEYS.items()},
         goodput_req_per_sec=_num(goodput),
         raw=payload,
     )
@@ -221,3 +236,110 @@ def run_driver(
     with save_path.open() as f:
         payload = json.load(f)
     return parse_bench_output(payload)
+
+
+def run_driver_with_rate_search(
+    endpoint: str,
+    trace_path: Path,
+    model: str,
+    result_dir: Path,
+    result_name_prefix: str,
+    *,
+    max_e2e_slo_ms: float,
+    num_prompts: int | None = 64,
+    timeout_per_bench_s: int = 1800,
+    dataset_name: str = "random",
+    goodput_slo_ms: dict[str, float] | None = None,
+    seed: int | None = None,
+    min_request_rate: int = 1,
+) -> DriverResult:
+    """Mirror ``auto_tune.sh``'s rate-down search: find the highest
+    sustainable request rate that meets the E2E SLO.
+
+    T-38. autoinfer's single-shot driver invocation always saturated
+    the queue (default ``--request-rate inf``), so every cell measured
+    goodput=0 regardless of config quality. ``auto_tune.sh`` iterates
+    rates downward from ``int(throughput) + 1`` until P99 E2EL <=
+    ``MAX_LATENCY_ALLOWED_MS``. This function reproduces that loop.
+
+    Algorithm (matches benchmarks/auto_tune/auto_tune.sh lines 161-228):
+    1. Initial measurement at ``--request-rate inf``. If P99 E2EL <=
+       ``max_e2e_slo_ms``, return that result (the server can handle
+       saturated load within SLO).
+    2. Otherwise: start at ``rate = int(request_throughput) + 1`` and
+       decrement by 1 each iteration. The first rate where P99 E2EL
+       meets the SLO is the answer.
+    3. If we drop to ``min_request_rate`` (default 1) without meeting
+       SLO, return the last measurement with ``chosen_request_rate=
+       min_request_rate``. The caller decides whether
+       ``goodput_req_per_sec`` (which will be 0 in that case) is a
+       failure.
+
+    Each per-rate bench writes its own JSON file under ``result_dir``
+    named ``{result_name_prefix}_rate_{rate}.json`` (or ``_rate_inf``
+    for the initial measurement). Matches ``auto_tune.sh``'s
+    ``bm_log_..._requestrate_*`` pattern; lets post-hoc analysis see
+    the rate-vs-latency curve per cell.
+
+    Returns a single ``DriverResult`` — the one that met the SLO (or
+    the last one tried if none met it). ``chosen_request_rate`` is
+    populated with the rate value (``float('inf')`` for inf-rate
+    success, or the integer rate that met).
+    """
+    initial = run_driver(
+        endpoint=endpoint,
+        trace_path=trace_path,
+        model=model,
+        result_dir=result_dir,
+        result_name=f"{result_name_prefix}_rate_inf.json",
+        num_prompts=num_prompts,
+        request_rate=None,
+        timeout_s=timeout_per_bench_s,
+        dataset_name=dataset_name,
+        goodput_slo_ms=goodput_slo_ms,
+        seed=seed,
+    )
+    if initial.e2el_ms.get("p99", 0.0) <= max_e2e_slo_ms and initial.e2el_ms.get("p99", 0.0) > 0:
+        # initial inf-rate already meets SLO
+        return _with_chosen_rate(initial, float("inf"))
+
+    # Rate-down search.
+    start_rate = max(int(initial.request_throughput) + 1, min_request_rate)
+    last_result = initial
+    for rate in range(start_rate, min_request_rate - 1, -1):
+        res = run_driver(
+            endpoint=endpoint,
+            trace_path=trace_path,
+            model=model,
+            result_dir=result_dir,
+            result_name=f"{result_name_prefix}_rate_{rate}.json",
+            num_prompts=num_prompts,
+            request_rate=float(rate),
+            timeout_s=timeout_per_bench_s,
+            dataset_name=dataset_name,
+            goodput_slo_ms=goodput_slo_ms,
+            seed=seed,
+        )
+        last_result = res
+        if 0 < res.e2el_ms.get("p99", 0.0) <= max_e2e_slo_ms:
+            return _with_chosen_rate(res, float(rate))
+
+    # Never met SLO; return the last measurement with the floor rate.
+    return _with_chosen_rate(last_result, float(min_request_rate))
+
+
+def _with_chosen_rate(result: DriverResult, rate: float) -> DriverResult:
+    """Return a copy of ``result`` with ``chosen_request_rate=rate``.
+
+    DriverResult is frozen so we have to reconstruct it.
+    """
+    return DriverResult(
+        tokens_per_sec=result.tokens_per_sec,
+        request_throughput=result.request_throughput,
+        ttft_ms=dict(result.ttft_ms),
+        tpot_ms=dict(result.tpot_ms),
+        e2el_ms=dict(result.e2el_ms),
+        goodput_req_per_sec=result.goodput_req_per_sec,
+        chosen_request_rate=rate,
+        raw=dict(result.raw),
+    )
