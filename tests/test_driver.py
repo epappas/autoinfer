@@ -2,8 +2,12 @@ from __future__ import annotations
 
 from pathlib import Path
 
+import pytest
+
 from autoinfer.harness.driver import (
+    DriverResult,
     _format_goodput_args,
+    _with_chosen_rate,
     build_bench_command,
     parse_bench_output,
 )
@@ -191,3 +195,212 @@ def test_parse_goodput_present_overrides_request_throughput() -> None:
     }
     r = parse_bench_output(payload)
     assert r.goodput_req_per_sec == 6.5
+
+
+def test_parse_extracts_e2el_percentiles() -> None:
+    """T-38: e2el percentiles needed for rate-search SLO check."""
+    payload = {
+        "p99_e2el_ms": 494.0,
+        "median_e2el_ms": 320.0,
+        "request_throughput": 21.0,
+    }
+    r = parse_bench_output(payload)
+    assert r.e2el_ms["p99"] == 494.0
+    assert r.e2el_ms["p50"] == 320.0
+
+
+def test_with_chosen_rate_preserves_all_fields_and_sets_rate() -> None:
+    """T-38: ``_with_chosen_rate`` produces a copy of DriverResult with
+    chosen_request_rate set; all other fields preserved."""
+    src = DriverResult(
+        tokens_per_sec=100.0,
+        request_throughput=21.39,
+        ttft_ms={"p99": 126.0},
+        tpot_ms={"p99": 22.0},
+        e2el_ms={"p99": 494.0},
+        goodput_req_per_sec=21.39,
+        raw={"some": "field"},
+    )
+    out = _with_chosen_rate(src, 23.0)
+    assert out.chosen_request_rate == 23.0
+    assert out.tokens_per_sec == src.tokens_per_sec
+    assert out.request_throughput == src.request_throughput
+    assert out.ttft_ms == src.ttft_ms
+    assert out.e2el_ms == src.e2el_ms
+    assert out.goodput_req_per_sec == src.goodput_req_per_sec
+    assert out.raw == src.raw
+
+
+def test_with_chosen_rate_accepts_inf() -> None:
+    """When initial inf-rate measurement meets SLO, chosen_request_rate
+    = float('inf')."""
+    src = DriverResult(
+        tokens_per_sec=100.0,
+        request_throughput=21.39,
+        ttft_ms={},
+        tpot_ms={},
+        e2el_ms={"p99": 480.0},
+        goodput_req_per_sec=21.39,
+        raw={},
+    )
+    out = _with_chosen_rate(src, float("inf"))
+    assert out.chosen_request_rate == float("inf")
+
+
+# ---------------------------------------------------------------------------
+# T-38 — rate-down search loop (mirroring auto_tune.sh's algorithm).
+#
+# The rate-search function delegates per-rate bench execution to
+# ``run_driver``. To test the search LOGIC in isolation from the
+# subprocess layer, we inject a stub ``run_driver`` via monkey-patch
+# that returns preset DriverResults keyed on the request_rate kwarg.
+# This is test-only isolation of the algorithm under test (the search
+# loop), not faking of the function under test.
+# ---------------------------------------------------------------------------
+
+
+def _make_result(*, e2el_p99: float, throughput: float) -> DriverResult:
+    """Helper to build a DriverResult with just the fields the
+    rate-search algorithm reads."""
+    return DriverResult(
+        tokens_per_sec=throughput * 20,
+        request_throughput=throughput,
+        ttft_ms={},
+        tpot_ms={},
+        e2el_ms={"p99": e2el_p99},
+        goodput_req_per_sec=throughput,
+        raw={},
+    )
+
+
+def test_rate_search_returns_inf_when_initial_meets_slo(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path,
+) -> None:
+    """If the initial --request-rate inf measurement already meets the
+    SLO, return immediately with chosen_request_rate=inf."""
+    from autoinfer.harness import driver as drv
+
+    calls: list[float | None] = []
+
+    def stub(*, request_rate: float | None, **kw: object) -> DriverResult:
+        calls.append(request_rate)
+        return _make_result(e2el_p99=400.0, throughput=47.0)
+
+    monkeypatch.setattr(drv, "run_driver", stub)
+    out = drv.run_driver_with_rate_search(
+        endpoint="http://x",
+        trace_path=tmp_path / "t",
+        model="m",
+        result_dir=tmp_path,
+        result_name_prefix="c",
+        max_e2e_slo_ms=500.0,
+    )
+    assert out.chosen_request_rate == float("inf")
+    assert calls == [None]  # only the initial inf-rate measurement
+
+
+def test_rate_search_iterates_down_until_slo_met(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path,
+) -> None:
+    """Initial inf-rate gives throughput=47 and e2el_p99=20000 (over
+    SLO). Loop starts at rate=48 and decrements; assume rates 48..24
+    are over SLO and rate=23 meets it (P99=494). Return at rate=23."""
+    from autoinfer.harness import driver as drv
+
+    calls: list[float | None] = []
+
+    def stub(*, request_rate: float | None, **kw: object) -> DriverResult:
+        calls.append(request_rate)
+        if request_rate is None:
+            # Initial inf-rate — over SLO, observed throughput 47.
+            return _make_result(e2el_p99=20000.0, throughput=47.0)
+        if request_rate <= 23.0:
+            # Rate 23 finds SLO compliance.
+            return _make_result(e2el_p99=494.0, throughput=21.39)
+        # Rates above 23 still over SLO.
+        return _make_result(e2el_p99=20000.0, throughput=21.39)
+
+    monkeypatch.setattr(drv, "run_driver", stub)
+    out = drv.run_driver_with_rate_search(
+        endpoint="http://x",
+        trace_path=tmp_path / "t",
+        model="m",
+        result_dir=tmp_path,
+        result_name_prefix="c",
+        max_e2e_slo_ms=500.0,
+    )
+    assert out.chosen_request_rate == 23.0
+    # Iteration: initial inf, then 48, 47, 46, ..., 24, 23 — total 27 calls.
+    assert calls[0] is None
+    assert calls[1] == 48.0
+    assert calls[-1] == 23.0
+    # Result reflects the rate=23 measurement.
+    assert out.e2el_ms["p99"] == 494.0
+    assert out.goodput_req_per_sec == 21.39
+
+
+def test_rate_search_bails_at_min_rate_when_no_rate_meets_slo(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path,
+) -> None:
+    """Workload too slow for even rate=1 to meet SLO. Loop bails at
+    min_request_rate=1; returns the last measurement with
+    chosen_request_rate=1.0 and (typically) goodput=0."""
+    from autoinfer.harness import driver as drv
+
+    calls: list[float | None] = []
+
+    def stub(*, request_rate: float | None, **kw: object) -> DriverResult:
+        calls.append(request_rate)
+        # No rate meets SLO; pretend throughput is 5 req/s so loop
+        # starts at rate=6.
+        if request_rate is None:
+            return _make_result(e2el_p99=60000.0, throughput=5.0)
+        return _make_result(e2el_p99=60000.0, throughput=5.0)
+
+    monkeypatch.setattr(drv, "run_driver", stub)
+    out = drv.run_driver_with_rate_search(
+        endpoint="http://x",
+        trace_path=tmp_path / "t",
+        model="m",
+        result_dir=tmp_path,
+        result_name_prefix="c",
+        max_e2e_slo_ms=500.0,
+    )
+    assert out.chosen_request_rate == 1.0
+    # Iteration: initial inf, then 6, 5, 4, 3, 2, 1 — total 7 calls.
+    assert calls == [None, 6.0, 5.0, 4.0, 3.0, 2.0, 1.0]
+
+
+def test_rate_search_passes_seed_and_slo_through(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path,
+) -> None:
+    """seed + goodput_slo_ms must flow into every per-rate run_driver call."""
+    from autoinfer.harness import driver as drv
+
+    seen_seeds: list[int | None] = []
+    seen_slos: list[dict[str, float] | None] = []
+
+    def stub(
+        *, request_rate: float | None,
+        seed: int | None = None,
+        goodput_slo_ms: dict[str, float] | None = None,
+        **kw: object,
+    ) -> DriverResult:
+        seen_seeds.append(seed)
+        seen_slos.append(goodput_slo_ms)
+        return _make_result(e2el_p99=400.0, throughput=20.0)
+
+    monkeypatch.setattr(drv, "run_driver", stub)
+    drv.run_driver_with_rate_search(
+        endpoint="http://x",
+        trace_path=tmp_path / "t",
+        model="m",
+        result_dir=tmp_path,
+        result_name_prefix="c",
+        max_e2e_slo_ms=500.0,
+        seed=42,
+        goodput_slo_ms={"TTFT": 500.0, "TPOT": 50.0, "E2E": 500.0},
+    )
+    # initial inf-rate already met SLO so only one call
+    assert seen_seeds == [42]
+    assert seen_slos[0] == {"TTFT": 500.0, "TPOT": 50.0, "E2E": 500.0}

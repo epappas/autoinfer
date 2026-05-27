@@ -13,6 +13,7 @@ def test_compose_measurement_maps_all_fields() -> None:
         request_throughput=10.0,
         ttft_ms={"p50": 100.0, "p95": 150.0, "p99": 200.0},
         tpot_ms={"p50": 20.0, "p95": 30.0, "p99": 45.0},
+        e2el_ms={"p50": 300.0, "p95": 450.0, "p99": 490.0},
         goodput_req_per_sec=9.0,
         raw={},
     )
@@ -44,6 +45,7 @@ def test_compose_measurement_handles_missing_percentiles() -> None:
         request_throughput=1.0,
         ttft_ms={},
         tpot_ms={},
+        e2el_ms={},
         goodput_req_per_sec=1.0,
         raw={},
     )
@@ -63,6 +65,7 @@ def test_compose_measurement_includes_kl_percentiles() -> None:
         request_throughput=1.0,
         ttft_ms={"p99": 100.0, "p50": 50.0},
         tpot_ms={"p99": 30.0, "p50": 20.0},
+        e2el_ms={"p99": 400.0, "p50": 200.0},
         goodput_req_per_sec=1.0,
         raw={},
     )
@@ -90,6 +93,7 @@ def test_compose_measurement_kl_percentiles_handle_empty() -> None:
         request_throughput=1.0,
         ttft_ms={"p99": 100.0},
         tpot_ms={"p99": 30.0},
+        e2el_ms={"p99": 400.0},
         goodput_req_per_sec=1.0,
         raw={},
     )
