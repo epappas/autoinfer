@@ -139,7 +139,15 @@ class L1EngineAdapter:
     batch_sizes: tuple[int, ...] = (1, 8, 64)
     candidate_port: int = 8000
     startup_timeout_s: int = 600
-    driver_timeout_s: int = 1800
+    driver_timeout_s: int = 600
+    """Per-bench timeout in seconds. With T-38's rate-search the same
+    timeout applies to each per-rate iteration; a hung bench is
+    detected this many seconds after launch. 600s (10 min) is generous
+    enough for a legitimate bench at low request rates (100 prompts /
+    rate=1 = ~100s issuance + serving time), tight enough that a stuck
+    bench costs a fraction of the deployment-hour cost rather than half
+    of it. C04a attempt 9 used 1800 (30 min) and a single hang
+    consumed the entire trial's budget."""
     gpu_device_id: int = 0
     dataset_name: str = "random"
     num_prompts: int = 64

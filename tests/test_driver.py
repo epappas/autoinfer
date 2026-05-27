@@ -72,6 +72,24 @@ def test_build_bench_command_random_default() -> None:
     assert "--save-result" in cmd
 
 
+def test_build_bench_command_emits_percentile_metrics_including_e2el() -> None:
+    """T-40: vLLM bench's ``--save-result`` JSON only writes percentile
+    fields for metrics listed in ``--percentile-metrics``. Without an
+    explicit ``e2el`` in the list, the JSON has no ``p99_e2el_ms`` field
+    and rate-search reads 0 → false negative → infinite iteration.
+    Pin that all four metrics flow through every bench invocation."""
+    cmd = build_bench_command(
+        endpoint="http://x",
+        trace_path=Path("t"),
+        model="m",
+        result_dir=Path("d"),
+        result_name="r",
+    )
+    assert "--percentile-metrics" in cmd
+    idx = cmd.index("--percentile-metrics")
+    assert cmd[idx + 1] == "ttft,tpot,itl,e2el"
+
+
 def test_build_bench_command_custom_passes_dataset_path() -> None:
     cmd = build_bench_command(
         endpoint="http://localhost:8000",

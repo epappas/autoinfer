@@ -178,6 +178,18 @@ def build_bench_command(
         "--save-result",
         "--result-filename", result_name,
         "--result-dir", str(result_dir),
+        # T-40: vLLM bench's ``--save-result`` JSON only writes the
+        # percentiles for metrics LISTED in --percentile-metrics. The
+        # default at the namespace level includes e2el, but the save
+        # JSON only includes percentile fields for the explicit list.
+        # Without an explicit ``e2el``, the JSON omits ``p99_e2el_ms``
+        # entirely; rate-search's SLO check (E2EL P99 <= max_e2e_slo_ms)
+        # then reads 0 and falsely concludes "no rate meets SLO" →
+        # iterates every rate → hangs the trial. Pass all four metrics
+        # explicitly. Confirmed by C04a attempt 10 (2026-05-27): the
+        # rate=42 bench saved p99_ttft + p99_tpot + p99_itl but no
+        # p99_e2el field.
+        "--percentile-metrics", "ttft,tpot,itl,e2el",
     ]
     if dataset_name in ("custom", "sharegpt", "sonnet"):
         cmd.extend(["--dataset-path", str(trace_path)])
