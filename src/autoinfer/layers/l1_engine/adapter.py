@@ -13,6 +13,7 @@ Startup / teardown / subprocess management is impure and requires a GPU
 from __future__ import annotations
 
 import os
+import signal
 import socket
 import subprocess
 import time
@@ -295,8 +296,18 @@ class L1EngineAdapter:
         # slice) for backward compatibility; the file has the full
         # context needed to diagnose.
         self._current_trial_id = trial_id
+        # T-39: ``start_new_session=True`` puts the candidate vLLM into
+        # its own process group so we can kill the entire tree (APIServer
+        # parent + EngineCore child workers) atomically with
+        # ``os.killpg``. C04a attempt 9 (2026-05-27) showed that without
+        # this, ``self._process.terminate()`` only signals the APIServer
+        # parent; the EngineCore child keeps holding ~74 GiB of GPU
+        # memory, polluting subsequent trials with "Free memory ... less
+        # than desired GPU memory utilization" startup failures.
         self._process = subprocess.Popen(
-            args, env=env, stdout=subprocess.PIPE, stderr=subprocess.PIPE
+            args, env=env,
+            stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+            start_new_session=True,
         )
         self._wait_ready()
 
@@ -345,15 +356,49 @@ class L1EngineAdapter:
             return ""
 
     def _stop_candidate(self) -> None:
+        """Terminate the candidate vLLM tree and wait for GPU memory release.
+
+        T-39 fix. The candidate was started with ``start_new_session=True``
+        so it has its own process group (PGID = candidate PID). We signal
+        the entire group (APIServer parent + EngineCore child workers)
+        with SIGTERM, wait up to 30s, then escalate to SIGKILL on the
+        group if anything's still alive. Final ``time.sleep(5)`` gives
+        CUDA the moment it needs to actually release HBM before the next
+        trial's vllm serve starts.
+
+        Before T-39, only the APIServer parent was signaled (via
+        ``self._process.terminate()``); the EngineCore child kept holding
+        ~74 GiB of GPU memory after the parent exited, causing 19/20
+        subsequent trials in C04a attempt 9 to fail startup with
+        "Free memory ... less than desired GPU memory utilization".
+        """
         if self._process is None:
             return
         if self._process.poll() is None:
-            self._process.terminate()
+            try:
+                pgid = os.getpgid(self._process.pid)
+            except (ProcessLookupError, OSError):
+                pgid = self._process.pid
+            try:
+                os.killpg(pgid, signal.SIGTERM)
+            except (ProcessLookupError, OSError):
+                # Process group already gone; fall back to single-process
+                # terminate to be safe.
+                self._process.terminate()
             try:
                 self._process.wait(timeout=30)
             except subprocess.TimeoutExpired:
-                self._process.kill()
+                try:
+                    os.killpg(pgid, signal.SIGKILL)
+                except (ProcessLookupError, OSError):
+                    self._process.kill()
                 self._process.wait()
+            # Brief settle window for CUDA to release HBM before the next
+            # candidate spawn. Empirically ~2-3 seconds is enough on
+            # vLLM 0.21.0 on A100; pad to 5 for safety. Without this,
+            # the next trial's vllm serve sees the previous trial's HBM
+            # still resident and bails at GMU validation.
+            time.sleep(5.0)
         self._process = None
 
     def _fail(
