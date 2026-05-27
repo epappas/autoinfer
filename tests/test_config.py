@@ -165,3 +165,41 @@ def test_determinism_extra_field_rejected() -> None:
     raw["harness"]["determinism"] = {"deterministic_kernels": True}  # type: ignore[index]
     with pytest.raises(ValidationError):
         RunConfig.model_validate(raw)
+
+
+def test_random_input_output_len_defaults() -> None:
+    """T-41: workload parameters default to vllm bench's own defaults
+    (128/64) for backwards-compat. Campaigns matching a reference
+    auto_tune workload must set them explicitly."""
+    run = RunConfig.model_validate(_minimal_raw())
+    assert run.harness.driver.random_input_len == 128
+    assert run.harness.driver.random_output_len == 64
+
+
+def test_random_input_output_len_accepts_t37_baseline_b_values() -> None:
+    """T-41: T-37 Baseline B uses input=256/output=20; C04a + C04b
+    configs match this exactly."""
+    raw = _minimal_raw()
+    raw["harness"]["driver"]["random_input_len"] = 256  # type: ignore[index]
+    raw["harness"]["driver"]["random_output_len"] = 20  # type: ignore[index]
+    run = RunConfig.model_validate(raw)
+    assert run.harness.driver.random_input_len == 256
+    assert run.harness.driver.random_output_len == 20
+
+
+def test_random_input_len_zero_or_negative_rejected() -> None:
+    """T-41: ge=1 constraint; zero or negative is invalid."""
+    raw = _minimal_raw()
+    raw["harness"]["driver"]["random_input_len"] = 0  # type: ignore[index]
+    with pytest.raises(ValidationError):
+        RunConfig.model_validate(raw)
+    raw["harness"]["driver"]["random_input_len"] = -1  # type: ignore[index]
+    with pytest.raises(ValidationError):
+        RunConfig.model_validate(raw)
+
+
+def test_random_output_len_zero_or_negative_rejected() -> None:
+    raw = _minimal_raw()
+    raw["harness"]["driver"]["random_output_len"] = 0  # type: ignore[index]
+    with pytest.raises(ValidationError):
+        RunConfig.model_validate(raw)

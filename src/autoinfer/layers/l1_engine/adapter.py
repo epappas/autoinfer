@@ -151,6 +151,13 @@ class L1EngineAdapter:
     gpu_device_id: int = 0
     dataset_name: str = "random"
     num_prompts: int = 64
+    random_input_len: int = 128
+    """Synthetic random-dataset input length in tokens. Only consumed
+    when ``dataset_name=random``. Plumbed from ``DriverConfig`` so
+    campaigns can match a reference auto_tune workload exactly. T-41."""
+    random_output_len: int = 64
+    """Synthetic random-dataset output length in tokens. Only consumed
+    when ``dataset_name=random``. T-41."""
     gate_concurrency: int = 4
     goodput_slo_ms: dict[str, float] | None = None
     """Optional ``{TTFT|TPOT|E2E -> ms}`` SLO passed to ``vllm bench
@@ -231,6 +238,8 @@ class L1EngineAdapter:
                     dataset_name=self.dataset_name,
                     goodput_slo_ms=self.goodput_slo_ms,
                     seed=self.bench_seed,
+                    random_input_len=self.random_input_len,
+                    random_output_len=self.random_output_len,
                 )
             else:
                 driver = run_driver(
@@ -244,6 +253,8 @@ class L1EngineAdapter:
                     num_prompts=self.num_prompts,
                     goodput_slo_ms=self.goodput_slo_ms,
                     seed=self.bench_seed,
+                    random_input_len=self.random_input_len,
+                    random_output_len=self.random_output_len,
                 )
         except (subprocess.TimeoutExpired, RuntimeError) as e:
             return TrialOutput(

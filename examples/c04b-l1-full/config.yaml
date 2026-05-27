@@ -22,6 +22,11 @@ harness:
     slo_e2e_p99_ms: 500.0
     dataset_name: random
     num_prompts: 100
+    # T-41: match T-37 Baseline B's workload exactly. The full-surface
+    # campaign tests whether the wider knob set finds recipes the
+    # 2-knob grid couldn't reach AT THE SAME WORKLOAD.
+    random_input_len: 256
+    random_output_len: 20
     bench_seed: 0
   gate:
     replica_uri: http://127.0.0.1:8001

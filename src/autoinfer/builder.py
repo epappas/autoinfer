@@ -155,6 +155,8 @@ def _build_l1_spec(
         startup_timeout_s=l1_cfg.startup_timeout_s,
         dataset_name=cfg.harness.driver.dataset_name,
         num_prompts=cfg.harness.driver.num_prompts,
+        random_input_len=cfg.harness.driver.random_input_len,
+        random_output_len=cfg.harness.driver.random_output_len,
         goodput_slo_ms=goodput_slo_ms,
         bench_seed=cfg.harness.driver.bench_seed,
         multiprocessing_v1=cfg.harness.determinism.multiprocessing_v1,

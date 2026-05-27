@@ -212,6 +212,34 @@ def test_determinism_defaults_preserve_legacy_behaviour(tmp_path: Path) -> None:
     assert l1.enforce_batch_invariance is True  # type: ignore[attr-defined]
 
 
+def test_random_lens_threaded_from_config_to_l1_adapter(
+    tmp_path: Path,
+) -> None:
+    """T-41: random_input_len + random_output_len must flow from
+    harness.driver into L1EngineAdapter so each trial's bench uses the
+    configured workload (not the vllm-bench defaults 128/64). C04a
+    attempt 11 (2026-05-27) burned ~$1.40 because this threading was
+    missing — autoinfer ran the wrong workload than T-37 Baseline B."""
+    raw = _raw_joint(tmp_path)
+    raw["harness"]["driver"]["random_input_len"] = 256
+    raw["harness"]["driver"]["random_output_len"] = 20
+    cfg = RunConfig.model_validate(raw)
+    runner, _ = build_runner(cfg)
+    l1 = runner.scheduler.specs["l1_engine"].adapter
+    assert l1.random_input_len == 256  # type: ignore[attr-defined]
+    assert l1.random_output_len == 20  # type: ignore[attr-defined]
+
+
+def test_random_lens_defaults_when_config_omits(tmp_path: Path) -> None:
+    """T-41: legacy configs without random_input_len/output_len keep
+    the historical vllm-bench defaults of 128/64."""
+    cfg = RunConfig.model_validate(_raw_joint(tmp_path))
+    runner, _ = build_runner(cfg)
+    l1 = runner.scheduler.specs["l1_engine"].adapter
+    assert l1.random_input_len == 128  # type: ignore[attr-defined]
+    assert l1.random_output_len == 64  # type: ignore[attr-defined]
+
+
 def test_corpus_info_captured_into_hw_context_and_event(tmp_path: Path) -> None:
     """T-35: trace_path sha256 is computed at run-start and recorded in
     both hw_context.json and the config_loaded event, so reproduction
