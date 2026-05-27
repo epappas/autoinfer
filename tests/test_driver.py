@@ -72,6 +72,25 @@ def test_build_bench_command_random_default() -> None:
     assert "--save-result" in cmd
 
 
+def test_build_bench_command_emits_custom_random_lens() -> None:
+    """T-41: random_input_len and random_output_len reach the CLI when
+    overridden from defaults. C04a + C04b configs set 256/20 to match
+    T-37 Baseline B."""
+    cmd = build_bench_command(
+        endpoint="http://x",
+        trace_path=Path("t"),
+        model="m",
+        result_dir=Path("d"),
+        result_name="r",
+        random_input_len=256,
+        random_output_len=20,
+    )
+    assert "--random-input-len" in cmd
+    assert cmd[cmd.index("--random-input-len") + 1] == "256"
+    assert "--random-output-len" in cmd
+    assert cmd[cmd.index("--random-output-len") + 1] == "20"
+
+
 def test_build_bench_command_emits_percentile_metrics_including_e2el() -> None:
     """T-40: vLLM bench's ``--save-result`` JSON only writes percentile
     fields for metrics listed in ``--percentile-metrics``. Without an

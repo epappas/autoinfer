@@ -221,6 +221,8 @@ def run_driver(
     dataset_name: str = "random",
     goodput_slo_ms: dict[str, float] | None = None,
     seed: int | None = None,
+    random_input_len: int = 128,
+    random_output_len: int = 64,
 ) -> DriverResult:
     """Execute ``vllm bench serve``; parse and return ``DriverResult``.
 
@@ -236,6 +238,8 @@ def run_driver(
         num_prompts=num_prompts,
         request_rate=request_rate,
         dataset_name=dataset_name,
+        random_input_len=random_input_len,
+        random_output_len=random_output_len,
         goodput_slo_ms=goodput_slo_ms,
         seed=seed,
     )
@@ -264,6 +268,8 @@ def run_driver_with_rate_search(
     goodput_slo_ms: dict[str, float] | None = None,
     seed: int | None = None,
     min_request_rate: int = 1,
+    random_input_len: int = 128,
+    random_output_len: int = 64,
 ) -> DriverResult:
     """Mirror ``auto_tune.sh``'s rate-down search: find the highest
     sustainable request rate that meets the E2E SLO.
@@ -310,6 +316,8 @@ def run_driver_with_rate_search(
         dataset_name=dataset_name,
         goodput_slo_ms=goodput_slo_ms,
         seed=seed,
+        random_input_len=random_input_len,
+        random_output_len=random_output_len,
     )
     if initial.e2el_ms.get("p99", 0.0) <= max_e2e_slo_ms and initial.e2el_ms.get("p99", 0.0) > 0:
         # initial inf-rate already meets SLO
@@ -331,6 +339,8 @@ def run_driver_with_rate_search(
             dataset_name=dataset_name,
             goodput_slo_ms=goodput_slo_ms,
             seed=seed,
+            random_input_len=random_input_len,
+            random_output_len=random_output_len,
         )
         last_result = res
         if 0 < res.e2el_ms.get("p99", 0.0) <= max_e2e_slo_ms:

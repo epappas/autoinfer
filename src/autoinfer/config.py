@@ -58,6 +58,32 @@ class DriverConfig(_Base):
     )
     dataset_name: Literal["random", "sharegpt", "custom", "sonnet"] = "random"
     num_prompts: int = Field(ge=1, default=64)
+    random_input_len: int = Field(
+        ge=1,
+        default=128,
+        description=(
+            "Synthetic random-dataset input length in tokens. Only "
+            "consumed when ``dataset_name=random``. Default 128 is "
+            "vllm bench's own default; campaigns comparing against "
+            "T-37 Baseline B should set this to 256 to match the "
+            "auto_tune.sh recon workload. T-41."
+        ),
+    )
+    random_output_len: int = Field(
+        ge=1,
+        default=64,
+        description=(
+            "Synthetic random-dataset output length in tokens. Only "
+            "consumed when ``dataset_name=random``. Default 64 is "
+            "vllm bench's own default; campaigns comparing against "
+            "T-37 Baseline B should set this to 20 to match the "
+            "auto_tune.sh recon workload. With output_len=64 the "
+            "decode budget alone (64 tokens x ~30ms TPOT = ~1920ms) "
+            "exceeds any sub-second E2E SLO regardless of config; "
+            "C04a attempt 11 (2026-05-27) burned ~$1.40 of GPU on "
+            "this exact mismatch. T-41."
+        ),
+    )
 
 
 class QualityGateConfig(_Base):
